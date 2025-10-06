@@ -237,27 +237,33 @@ void updateMotorSpeed(int targetSpeed) {
 }
 
 // ================================================================================================
-// Read battery voltage (via voltage divider)
-//  Voltage divider:
-      // Battery+ ── R1 ──┬── R2 ── GND
-      //                  │
-      //                  to Arduino (pinBatterySense)
+// Read battery voltage using a resistive divider
+//
+// Voltage divider circuit:
+//   Battery+ ── R1 ──┬── R2 ── GND
+//                    │
+//                    └── Arduino analog pin (pinBatterySense)
+//
+// Formula:
+//   Vout = Vin * R2 / (R1 + R2)
+//   Vin  = Vout * (R1 + R2) / R2
 // ================================================================================================
 void getBatteryVoltage() {
+  
+  int raw = analogRead(pinBatterySense); // ADC value (0–1023)
 
-  int raw = analogRead(pinBatterySense); // read from the pin
+  // Convert ADC value to voltage at the analog pin (Vout)
+  float vOut = raw * 5.0 / 1023.0;      
 
-  float vOut = raw * 5.0 / 1023.0;      // measured voltage
-  float vIn  = vOut * (R1 + R2) / R2;   // recalculate real battery voltage taking into account the voltage divider (R1 and R2 resistors)
+  // Recalculate the actual battery voltage (Vin) from divider ratio
+  float vIn  = vOut * (R1 + R2) / R2;   
 
-if (vIn < 2.5) {
-  Serial.println("No battery");
-} else {
+  // Optional: trigger audio battery indicator
   indicateBattery(vIn);
+
+  // Print result to serial monitor with 2 decimal places
   Serial.print("Battery Voltage: ");
   Serial.println(vIn, 2);
-}
-
 }
 
 // ================================================================================================
@@ -566,7 +572,7 @@ int Distancia_test() {
 // ================================================================================================
 // Active Buzzer Pattern Player
 // ================================================================================================
-int buzzerPattern[25];
+int buzzerPattern[40];
 int buzzerIndex = 0;
 unsigned long buzzerTimer = 0;
 
@@ -734,7 +740,7 @@ void playVoltagePattern(float vIn) {
   buzzerPattern[idx] = 0;
 
   // Start playback
-  buzzerIndex =vvv                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            0;
+  buzzerIndex = 0;                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         0;
   buzzerTimer = millis();
   if (buzzerPattern[0] > 0) {
     digitalWrite(pinBuzzer, HIGH);
