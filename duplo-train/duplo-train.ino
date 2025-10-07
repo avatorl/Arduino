@@ -75,13 +75,11 @@ const int button9 = 74; // Battery Test
 const int pinBatterySense   = A0;   // Battery voltage monitoring
 const int pinUltrasonicTrig = A3;   // Ultrasonic sensor trigger
 const int pinUltrasonicEcho = A4;   // Ultrasonic sensor echo
-const int pinIRReceiver     = 2;   // IR receiver input: D2 or D3 required to wake from sleep
-
+const int pinIRReceiver     = 2;    // IR receiver input: D2 or D3 required to wake from sleep
 const int pinEngineA_1A     = 5;    // Motor direction and speed (PWM)
 const int pinEngineA_1B     = 6;    // Motor direction and speed (PWM)
-
 const int pinLED1_R = 11, pinLED1_G = 3, pinLED1_B = 4;  // RGB LED #1 (ON/OFF only, no PWM required)
-const int pinLED2_R = 7, pinLED2_G = 8, pinLED2_B = 9;  // RGB LED #2 (ON/OFF only, no PWM required)
+const int pinLED2_R = 7,  pinLED2_G = 8, pinLED2_B = 9;  // RGB LED #2 (ON/OFF only, no PWM required)
 const int pinLEDGreen       = 10;   // Green LED (PWM required)
 const int pinBuzzer         = 12;   // Active buzzer (with generator)
 
@@ -102,9 +100,11 @@ const float R1 = 10000.0;             // Top resistor (to battery +)
 const float R2 = 4700.0;              // Bottom resistor (to GND)
 const int NMedian   = 5;              // number of samples for median filter
 const int maxSafeSpeed = 180;         // Motor safety speed limit (battery)
-const int distanceStop = 8;          // distance to obstacle <= cm to stop the train
+const int distanceStop = 8;           // distance to obstacle <= cm to stop the train
 const int distanceStart = 11;         // distance to obstacle >= cm to re-start the train
 const int distanceMaxSpeed = 50;      // distance to obstacle >= cm to run at max speed
+const float lowBatteryWarn = 6.6;   // warn at this voltage
+const float lowBatteryStop = 6.4;   // force stop at this voltage
 
 // ================================================================================================
 // Control variables
@@ -116,6 +116,7 @@ int MotorDirection  = 1;   // always has a direction
 int Speed           = 0;   // stopped at start
 int Distance        = 0;   // Latest distance from ultrasonic
 
+// --- Distance median filter state ---
 int distanceBuffer[NMedian];
 int bufferIndex = 0;
 bool bufferFilled = false;
@@ -152,7 +153,6 @@ int currentStep = 0;   // 0=stop, 1=~3.5V, 2=~4.5V, 3=~6V
 // Setup
 // ================================================================================================
 void setup() {
-
   Serial.begin(9600);
 
   // Initialize Arduino pins
@@ -172,9 +172,7 @@ void setup() {
   pinMode(pinBatterySense, INPUT);
 
   playPattern(pattern_melody); // Play melody
-
   SetGreenLightValue(0);
-
   SetRGBColor(FrontLightOnOff ? "red" : "off");
 
   // Measure battery at startup
@@ -186,27 +184,37 @@ void setup() {
   configureSpeedSteps();  
 
   lastActive = millis();   // seed idle timer
-
   IrReceiver.begin(pinIRReceiver); // Start IR Receiver
-
 }
 
 // ================================================================================================
 // Main Loop
 // ================================================================================================
 void loop() {
-  
   if (UltrasonicOnOff == 1) {
     SpeedAutoUltrasonic();
   }
-
   translateIR();
-
   updateBuzzer();
 
-  // check idle timeout
-  if (millis() - lastActive > idleTimeout) {
-    goToIdle();
+  // === Battery monitor ===
+  float vNow = getBatteryVoltageDirect();
+  if (vNow < lowBatteryStop) {
+    Serial.println("Battery critically low → stopping train");
+    Stop();
+    SetRGBColor("red");
+    playPattern(pattern_descend);  // sad beep
+    while (true) {
+      // infinite sleep until reset/charging
+      LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
+    }
+  } else if (vNow < lowBatteryWarn) {
+    static unsigned long lastWarn = 0;
+    if (millis() - lastWarn > 60000) { // warn max once per minute
+      Serial.println("Battery low warning");
+      playPattern(pattern_batteryWarn);
+      lastWarn = millis();
+    }
   }
 
   // Jog release watchdog (extra safety)
@@ -218,7 +226,6 @@ void loop() {
   }
 
   delay(10);
-
 }
 
 // ================================================================================================
@@ -260,7 +267,7 @@ int pwmFromVoltage(float desiredMotorV) {
   batteryVoltage = getBatteryVoltageDirect();
   if (batteryVoltage <= 0) return 0;
   // Clamp to max 6 V effective
-  float vm = min(desiredMotorV, 6.0);
+  float vm = min(desiredMotorV, maxSafeVoltage);
   int pwm = (int)(255.0 * vm / batteryVoltage);
   return constrain(pwm, 0, 255);
 }
@@ -280,6 +287,7 @@ void configureSpeedSteps() {
 }
 
 void playStepBeep(int step) {
+  if (SoundOnOff != 1) return;   // respect mute
   for (int j = 0; j < 20; j++) buzzerPattern[j] = 0;
   int idx = 0;
   if (step == 0) {
@@ -323,23 +331,20 @@ void decreaseStep() { if (currentStep > 0) currentStep--; applySpeedStep(); }
 // Ultrasonic Auto-speed mapping
 // ================================================================================================
 float motorVoltageFromDistance(int distance) {
-  // Hard stop thresholds
-  if (distance < distanceStop)   return 0.0;   // too close → stop
-  if (distance <= distanceStart) return 0.0;   // buffer zone → still stop
+  if (distance < distanceStop)   return 0.0;
+  if (distance <= distanceStart) return 0.0;
 
   int lastIdx = sizeof(voltageSteps) / sizeof(voltageSteps[0]) - 1;
-  float minV = min(maxSafeVoltage,voltageSteps[1]);       // first usable step (~3.5V)
-  float maxV = min(maxSafeVoltage,voltageSteps[lastIdx]); // max step (~6.0V)
+  float minV = min(maxSafeVoltage, voltageSteps[1]);        // ≈3.5V
+  float maxV = min(maxSafeVoltage, voltageSteps[lastIdx]);  // ≈6.0V
 
-  // Linear ramp between 12 cm and 50 cm
   if (distance < distanceMaxSpeed) {
-    // Map 12 cm → 3 V, 50 cm → 6 V
-    float rawV = minV + ( (distance - distanceStart) * (minV / (distanceMaxSpeed - distanceStart)) );
+    float spanV = (maxV - minV);
+    float spanD = (float)(distanceMaxSpeed - distanceStart);
+    float rawV  = minV + (distance - distanceStart) * (spanV / spanD);
     return constrain(rawV, minV, maxV);
   }
-
-  // Beyond 50 cm → full speed (6 V)
-  return maxV;
+  return maxV; // ≥ 50 cm → full speed
 }
 
 void SpeedAutoUltrasonic() {
@@ -393,13 +398,19 @@ int Distancia_test() {
   digitalWrite(pinUltrasonicTrig, HIGH);
   delayMicroseconds(10);
   digitalWrite(pinUltrasonicTrig, LOW);
-  long duration = pulseIn(pinUltrasonicEcho, HIGH, 30000); // max 30ms
-  if (duration == 0) return 400; // assume far
-  return (int)(duration / 58);
+
+  // timeout = 100 ms
+  long duration = pulseIn(pinUltrasonicEcho, HIGH, 100000L);
+
+  if (duration == 0) return distanceMaxSpeed;   // no echo → treat as "far enough"
+  
+  int cm = (int)(duration / 58);
+  return min(cm, distanceMaxSpeed);             // cap at 50 cm
 }
 
 int getMedianDistance() {
-  distanceBuffer[bufferIndex] = Distancia_test();
+  int raw = Distancia_test();         // raw single measurement
+  distanceBuffer[bufferIndex] = raw;  // insert into buffer
   bufferIndex = (bufferIndex + 1) % NMedian;
   if (bufferIndex == 0) bufferFilled = true;
 
@@ -407,6 +418,7 @@ int getMedianDistance() {
   int temp[NMedian];
   for (int i = 0; i < size; i++) temp[i] = distanceBuffer[i];
 
+  // simple bubble sort for median
   for (int i = 0; i < size - 1; i++) {
     for (int j = i + 1; j < size; j++) {
       if (temp[j] < temp[i]) {
@@ -414,7 +426,17 @@ int getMedianDistance() {
       }
     }
   }
-  return temp[size / 2];
+  int median = temp[size / 2];
+
+  // Serial debug
+  Serial.print("Ultrasonic raw="); 
+  Serial.print(raw);
+  Serial.print(" cm  |  median=");
+  Serial.print(median);
+  Serial.println(" cm");
+
+  Distance = median;
+  return median;
 }
 
 // ================================================================================================
@@ -444,7 +466,7 @@ uint16_t irReceive() {
 // Motor Control
 // ================================================================================================
 void setMotor(const char* direction, int speed) {
-  int safeSpeed = constrain(speed, 0, maxSafeSpeed);
+  int safeSpeed = constrain(speed, 0, 255);
 
   if (strcmp(direction, "forward") == 0) {
     analogWrite(pinEngineA_1A, safeSpeed);
@@ -480,7 +502,6 @@ void GoForward() {
   MotorDirection = 1;
   if (Speed > 0) {
     setMotor("forward", Speed);
-    Serial.println("Driving Forward >>>");
   }
 }
 
@@ -698,6 +719,7 @@ void updateBuzzer() {
       buzzerPattern[0] = 0;
       return;
     }
+
     if (buzzerIndex % 2 == 0) digitalWrite(pinBuzzer, HIGH);
     else                      digitalWrite(pinBuzzer, LOW);
   }
@@ -724,7 +746,8 @@ void playPattern(const int *pattern) {
 }
 
 void playVoltagePattern(float vIn) {
-  digitalWrite(pinBuzzer, LOW);   // 🔹 ensure buzzer off first
+  if (SoundOnOff != 1) return;   // respect mute
+  digitalWrite(pinBuzzer, LOW);   // ensure buzzer off first
 
   int volts  = (int)floor(vIn);
   int tenths = ((int)(vIn * 10)) % 10;
@@ -738,9 +761,9 @@ void playVoltagePattern(float vIn) {
   buzzerPattern[idx] = 0;
   buzzerIndex = 0;
   buzzerTimer = millis();
+
   if (buzzerPattern[0] > 0) {
     digitalWrite(pinBuzzer, HIGH);
-    analogWrite(pinLEDGreen, 255);
   }
 }
 
