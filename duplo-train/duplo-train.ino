@@ -105,6 +105,13 @@ int distanceBuffer[NMedian];
 int bufferIndex = 0;
 bool bufferFilled = false;
 
+#include <LowPower.h>   // RocketScream LowPower library
+
+unsigned long lastActive = 0;
+const unsigned long idleTimeout = 15UL * 60UL * 1000UL; // 15 minutes
+// In this state, the Arduino will never wake up unless you configure an external interrupt pin (like D2 or D3) tied to your IR receiver.
+// Right now, with A5 for IR, sleep means hard freeze until reset.
+
 // ================================================================================================
 // Motor speed steps based on battery voltage
 // ================================================================================================
@@ -113,6 +120,13 @@ int pwmSteps[4];   // same size as voltageSteps
 // Desired motor voltages for steps (V)
 float voltageSteps[] = {0.0, 3.5, 4.5, 6.0};
 float batteryVoltage = 0.0;
+
+// ================================================================================================
+// Active Buzzer Pattern Player
+// ================================================================================================
+int buzzerPattern[40];
+int buzzerIndex = 0;
+unsigned long buzzerTimer = 0;
 
 // ================================================================================================
 // Setup
@@ -155,6 +169,8 @@ void setup() {
   // Configure dynamic speed steps
   configureSpeedSteps();  
 
+  lastActive = millis();   // seed idle timer
+
   IrReceiver.begin(pinIRReceiver); // Start IR Receiver
 
 }
@@ -178,8 +194,38 @@ void loop() {
   //   lastCheck = millis();
   // }
 
+  // check idle timeout
+  if (millis() - lastActive > idleTimeout) {
+    goToIdle();
+  }
+
   delay(10);
 
+}
+
+void goToIdle() {
+  Serial.println("Idle: turning everything off...");
+
+  // stop buzzer and clear pattern
+  digitalWrite(pinBuzzer, LOW);
+  buzzerPattern[0] = 0;
+  buzzerIndex = 0;
+
+  // turn off LEDs
+  SetRGBColor("off");
+  SetGreenLightValue(0);
+
+  // notify with short melody
+  playPattern(pattern_descend);
+  delay(2000);  // let it play fully
+  digitalWrite(pinBuzzer, LOW);
+
+  // finally sleep
+  Serial.println("Entering sleep mode...");
+  LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
+
+  // after wake up (external interrupt only!)
+  lastActive = millis();  
 }
 
 // Measure battery voltage directly
@@ -383,7 +429,11 @@ uint16_t irReceive() {
 // IR Remote command handler
 // ================================================================================================
 void translateIR() {
-  switch (irReceive()) {
+  uint16_t code = irReceive();
+  if (code == 0) return;          // no key → do nothing
+  lastActive = millis();           // ✅ real user activity seen
+
+  switch (code) {
 
     case buttonCHminus: // Speed -
       GreenLEDBlink();
@@ -484,7 +534,7 @@ void translateIR() {
         playPattern(pattern_descend);
 
         // Reset manual mode to minimal speed step
-        currentStep = 1;   // so next CH+ or CH- starts at lowest speed
+        currentStep = 0;   // so next CH+ or CH- starts at lowest speed
         Serial.println("Manual mode rearmed: next step = 1 (≈3.5V)");
       }
       break;
@@ -640,12 +690,7 @@ int Distancia_test() {
   return (int)(duration / 58);
 }
 
-// ================================================================================================
-// Active Buzzer Pattern Player
-// ================================================================================================
-int buzzerPattern[40];
-int buzzerIndex = 0;
-unsigned long buzzerTimer = 0;
+
 
 
 // ================================================================================================
