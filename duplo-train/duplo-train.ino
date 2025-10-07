@@ -97,6 +97,9 @@ const float R1 = 10000.0;             // Top resistor (to battery +)
 const float R2 = 4700.0;              // Bottom resistor (to GND)
 const int NMedian   = 5;              // number of samples for median filter
 const int maxSafeSpeed = 180;         // Motor safety speed limit (battery)
+const int distanceStop = 8;          // distance to obstacle <= cm to stop the train
+const int distanceStart = 12;         // distance to obstacle >= cm to re-start the train
+const int distanceMaxSpeed = 50;      // distance to obstacle >= cm to run at max speed
 
 // ================================================================================================
 // Control variables
@@ -305,11 +308,23 @@ void decreaseStep() { if (currentStep > 0) currentStep--; applySpeedStep(); }
 // ================================================================================================
 // Ultrasonic Auto-speed
 // ================================================================================================
+// ================================================================================================
+// Ultrasonic Auto-speed mapping
+// ================================================================================================
 float motorVoltageFromDistance(int distance) {
-  if (distance < 7)  return 0.0;
-  if (distance <= 10) return 0.0;
-  float rawV = distance * 0.1 + 1.0;  // tune as needed
-  return constrain(rawV, 3.0, 6.0);
+  // Hard stop thresholds
+  if (distance < distanceStop)   return 0.0;   // too close → stop
+  if (distance <= distanceStart) return 0.0;   // buffer zone → still stop
+
+  // Linear ramp between 12 cm and 50 cm
+  if (distance < distanceMaxSpeed) {
+    // Map 12 cm → 3 V, 50 cm → 6 V
+    float rawV = 3.0 + ( (distance - distanceStart) * (3.0 / (distanceMaxSpeed - distanceStart)) );
+    return constrain(rawV, 3.0, 6.0);
+  }
+
+  // Beyond 50 cm → full speed (6 V)
+  return 6.0;
 }
 
 void SpeedAutoUltrasonic() {
@@ -676,6 +691,8 @@ void updateBuzzer() {
 void playPattern(const int *pattern) {
   if (SoundOnOff != 1) return;
 
+  digitalWrite(pinBuzzer, LOW);   // 🔹 ensure buzzer off first
+
   for (int j = 0; j < 10; j++) buzzerPattern[j] = 0;
 
   int i = 0;
@@ -692,18 +709,15 @@ void playPattern(const int *pattern) {
 }
 
 void playVoltagePattern(float vIn) {
+  digitalWrite(pinBuzzer, LOW);   // 🔹 ensure buzzer off first
+
   int volts  = (int)floor(vIn);
   int tenths = ((int)(vIn * 10)) % 10;
 
   int idx = 0;
-  // integer volts: long beeps
   for (int i = 0; i < volts; i++) { buzzerPattern[idx++] = 400; buzzerPattern[idx++] = 200; }
-
-  // ensure OFF pause before decimals
   if (idx % 2 == 0) { buzzerPattern[idx++] = 1; buzzerPattern[idx++] = 600; }
   else               { buzzerPattern[idx++] = 600; }
-
-  // tenths: short beeps
   for (int i = 0; i < tenths; i++) { buzzerPattern[idx++] = 150; buzzerPattern[idx++] = 150; }
 
   buzzerPattern[idx] = 0;
@@ -711,7 +725,7 @@ void playVoltagePattern(float vIn) {
   buzzerTimer = millis();
   if (buzzerPattern[0] > 0) {
     digitalWrite(pinBuzzer, HIGH);
-    analogWrite(pinLEDGreen, 255);  // optional sync
+    analogWrite(pinLEDGreen, 255);
   }
 }
 
