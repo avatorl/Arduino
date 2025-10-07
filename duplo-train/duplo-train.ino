@@ -132,6 +132,7 @@ const unsigned long idleTimeout = 15UL * 60UL * 1000UL; // 15 minutes
 int   pwmSteps[4];                 // 0..3
 float voltageSteps[] = {0.0, 3.5, 4.5, 6.0};
 float batteryVoltage = 0.0;
+const float maxSafeVoltage = 6.0;
 
 // Buzzer player
 int buzzerPattern[40];
@@ -258,11 +259,11 @@ int pwmFromVoltage(float desiredMotorV) {
 // ================================================================================================
 void configureSpeedSteps() {
   for (int i = 0; i < 4; i++) {
-    pwmSteps[i] = pwmFromVoltage(voltageSteps[i]);
+    pwmSteps[i] = pwmFromVoltage(min(maxSafeVoltage, voltageSteps[i]));
   }
   Serial.println("Configured speed steps (PWM values):");
   for (int i = 0; i < 4; i++) {
-    Serial.print(voltageSteps[i]); Serial.print("V → PWM ");
+    Serial.print(min(maxSafeVoltage, voltageSteps[i])); Serial.print("V → PWM ");
     Serial.println(pwmSteps[i]);
   }
 }
@@ -315,15 +316,19 @@ float motorVoltageFromDistance(int distance) {
   if (distance < distanceStop)   return 0.0;   // too close → stop
   if (distance <= distanceStart) return 0.0;   // buffer zone → still stop
 
+  int lastIdx = sizeof(voltageSteps) / sizeof(voltageSteps[0]) - 1;
+  float minV = min(maxSafeVoltage,voltageSteps[1]);       // first usable step (~3.5V)
+  float maxV = min(maxSafeVoltage,voltageSteps[lastIdx]); // max step (~6.0V)
+
   // Linear ramp between 12 cm and 50 cm
   if (distance < distanceMaxSpeed) {
     // Map 12 cm → 3 V, 50 cm → 6 V
-    float rawV = 3.0 + ( (distance - distanceStart) * (3.0 / (distanceMaxSpeed - distanceStart)) );
-    return constrain(rawV, 3.0, 6.0);
+    float rawV = minV + ( (distance - distanceStart) * (minV / (distanceMaxSpeed - distanceStart)) );
+    return constrain(rawV, minV, maxV);
   }
 
   // Beyond 50 cm → full speed (6 V)
-  return 6.0;
+  return maxV;
 }
 
 void SpeedAutoUltrasonic() {
