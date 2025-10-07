@@ -8,7 +8,6 @@
 // To-do / notes:
 // - Wake up from sleep by RC (move IR receiver to D2/D3 if possible)
 // - Print TPU front wheels
-// - Tune distance mapping for AutoSpeed (voltage steps ~0.1V)
 
 // ================================================================================================
 // Electronic components
