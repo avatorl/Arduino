@@ -144,7 +144,7 @@ float batteryVoltage = 0.0;
 const float maxSafeVoltage = 6.0;
 
 // Buzzer player
-int buzzerPattern[40];
+int buzzerPattern[20];
 int buzzerIndex = 0;
 unsigned long buzzerTimer = 0;
 
@@ -188,7 +188,7 @@ void setup() {
 
   // Measure battery at startup
   batteryVoltage = getBatteryVoltageDirect();
-  Serial.print("Battery measured: ");
+  Serial.print(F("Battery measured: "));
   Serial.println(batteryVoltage, 2);
 
   // Configure dynamic speed steps
@@ -202,11 +202,6 @@ void setup() {
 // Main Loop
 // ================================================================================================
 void loop() {
-  if (UltrasonicOnOff == 1) {
-    SpeedAutoUltrasonic();
-  }
-  translateIR();
-  updateBuzzer();
 
 // // --- Overcurrent protection with persistence ---
 //   float motorCurrent = getMotorCurrent();
@@ -216,9 +211,9 @@ void loop() {
 //       overCurrentStart = millis();
 //     } else {
 //       if (millis() - overCurrentStart > 200) { // >200 ms continuous
-//         Serial.print("⚠️ Motor Overcurrent: ");
+//         Serial.print(F("⚠️ Motor Overcurrent: "));
 //         Serial.print(motorCurrent, 2);
-//         Serial.println(" A → STOPPING!");
+//         Serial.println(F(" A → STOPPING!"));
 
 //         Stop();
 //         SetRGBColor("red");
@@ -232,47 +227,58 @@ void loop() {
 //     overCurrentActive = false; // reset if current goes back to normal
 //   }
 
-  // === Battery monitor ===
+  // === 1. Battery monitor first (critical safety) ===
   float vNow = getBatteryVoltageDirect();
   if (vNow < lowBatteryStop) {
-    Serial.println("Battery critically low → stopping train");
+    Serial.println(F("Battery critically low → stopping train"));
     Stop();
     SetRGBColor("red");
     playPattern(pattern_descend);  // sad beep
     while (true) {
-      // infinite sleep until reset/charging
       LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
     }
   } else if (vNow < lowBatteryWarn) {
     static unsigned long lastWarn = 0;
     if (millis() - lastWarn > 60000) {  // warn max once per minute
-      Serial.println("Battery low warning");
+      Serial.println(F("Battery low warning"));
       playPattern(pattern_batteryWarn);
       lastWarn = millis();
     }
   }
 
-  // === Idle timeout check ===
+  // === 2. Idle timeout watchdog ===
   if (millis() - lastActive > idleTimeout) {
     goToIdle();
   }
 
-  // Jog release watchdog (extra safety)
+  // === 3. Jog watchdog (safety if button released) ===
   if (momentaryActive && (millis() - momentaryLastSeen > momentaryTimeout)) {
-    Serial.println("Jog watchdog timeout → STOP");
+    Serial.println(F("Jog watchdog timeout → STOP"));
     Stop();
     SetRGBColor("red");
     momentaryActive = false;
   }
 
-  delay(10);
+  // === 4. Auto-speed mode ===
+  if (UltrasonicOnOff == 1) {
+    SpeedAutoUltrasonic();
+  }
+
+  // === 5. IR remote handler ===
+  translateIR();
+
+  // === 6. Buzzer non-blocking playback ===
+  updateBuzzer();
+
+  delay(10); // small loop delay
+
 }
 
 // ================================================================================================
 // Idle / Sleep
 // ================================================================================================
 void goToIdle() {
-  Serial.println("Idle: turning everything off...");
+  Serial.println(F("Idle: turning everything off..."));
 
   digitalWrite(pinBuzzer, LOW);
   buzzerPattern[0] = 0;
@@ -285,7 +291,7 @@ void goToIdle() {
   delay(2000);
   digitalWrite(pinBuzzer, LOW);
 
-  Serial.println("Entering sleep mode...");
+  Serial.println(F("Entering sleep mode..."));
 
   attachInterrupt(digitalPinToInterrupt(pinIRReceiver), wakeUp, CHANGE);
   LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
@@ -326,10 +332,10 @@ void configureSpeedSteps() {
   for (int i = 0; i < 4; i++) {
     pwmSteps[i] = pwmFromVoltage(min(maxSafeVoltage, voltageSteps[i]));
   }
-  Serial.println("Configured speed steps (PWM values):");
+  Serial.println(F("Configured speed steps (PWM values):"));
   for (int i = 0; i < 4; i++) {
     Serial.print(min(maxSafeVoltage, voltageSteps[i]));
-    Serial.print("V → PWM ");
+    Serial.print(F("V → PWM "));
     Serial.println(pwmSteps[i]);
   }
 }
@@ -355,11 +361,11 @@ void playStepBeep(int step) {
 void applySpeedStep() {
   Speed = pwmSteps[currentStep];
 
-  Serial.print("Step ");
+  Serial.print(F("Step "));
   Serial.print(currentStep);
-  Serial.print(": target ");
+  Serial.print(F(": target "));
   Serial.print(voltageSteps[currentStep]);
-  Serial.print("V → PWM ");
+  Serial.print(F("V → PWM "));
   Serial.println(Speed);
 
   playStepBeep(currentStep);
@@ -381,9 +387,7 @@ void decreaseStep() {
 // ================================================================================================
 // Ultrasonic Auto-speed
 // ================================================================================================
-// ================================================================================================
-// Ultrasonic Auto-speed mapping
-// ================================================================================================
+
 float motorVoltageFromDistance(int distance) {
   if (distance < distanceStop) return 0.0;
   if (distance <= distanceStart) return 0.0;
@@ -404,19 +408,19 @@ float motorVoltageFromDistance(int distance) {
 void SpeedAutoUltrasonic() {
   Distance = getMedianDistance();
 
-  Serial.print("Ultrasonic Distance: ");
+  Serial.print(F("Ultrasonic Distance: "));
   Serial.print(Distance);
-  Serial.println(" cm");
+  Serial.println(F(" cm"));
 
   float targetV = motorVoltageFromDistance(Distance);
   int targetSpeed = pwmFromVoltage(targetV);
 
   if (targetSpeed == 0) {
     SetRGBColor("red");
-    Serial.println("Auto: STOP");
+    Serial.println(F("Auto: STOP"));
   } else {
     SetRGBColor("white");
-    Serial.print("Auto target speed = ");
+    Serial.print(F("Auto target speed = "));
     Serial.print(targetSpeed);
     Serial.print(" (≈ ");
     Serial.print(targetV, 2);
@@ -485,11 +489,11 @@ int getMedianDistance() {
   int median = temp[size / 2];
 
   // Serial debug
-  Serial.print("Ultrasonic raw=");
+  Serial.print(F("Ultrasonic raw="));
   Serial.print(raw);
-  Serial.print(" cm  |  median=");
+  Serial.print(F(" cm  |  median="));
   Serial.print(median);
-  Serial.println(" cm");
+  Serial.println(F(" cm"));
 
   Distance = median;
   return median;
@@ -528,25 +532,25 @@ void setMotor(const char* direction, int speed) {
     analogWrite(pinEngineA_1A, safeSpeed);
     analogWrite(pinEngineA_1B, 0);
     MotorDirection = 1;
-    Serial.print("Driving Forward >>> Speed=");
+    Serial.print(F("Driving Forward >>> Speed="));
     Serial.println(safeSpeed);
   } else if (strcmp(direction, "backward") == 0) {
     analogWrite(pinEngineA_1A, 0);
     analogWrite(pinEngineA_1B, safeSpeed);
     MotorDirection = 2;
-    Serial.print("Driving Backward >> Speed=");
+    Serial.print(F("Driving Backward >> Speed="));
     Serial.println(safeSpeed);
   } else {  // stop
     analogWrite(pinEngineA_1A, 0);
     analogWrite(pinEngineA_1B, 0);
     Speed = 0;
-    Serial.println("Motor OFF");
+    Serial.println(F("Motor OFF"));
   }
 }
 
 void GoForward() {
   if (MotorDirection == 2 && Speed > 0) {
-    Serial.println("Ignored: cannot switch to FORWARD while moving");
+    Serial.println(F("Ignored: cannot switch to FORWARD while moving"));
     return;
   }
   if (MotorDirection == 2 && Speed == 0) {
@@ -561,7 +565,7 @@ void GoForward() {
 
 void GoBackward() {
   if (MotorDirection == 1 && Speed > 0) {
-    Serial.println("Ignored: cannot switch to BACKWARD while moving");
+    Serial.println(F("Ignored: cannot switch to BACKWARD while moving"));
     return;
   }
   if (MotorDirection == 1 && Speed == 0) {
@@ -571,7 +575,7 @@ void GoBackward() {
   MotorDirection = 2;
   if (Speed > 0) {
     setMotor("backward", Speed);
-    Serial.println("Driving Backward >>");
+    Serial.println(F("Driving Backward >>"));
   }
 }
 
@@ -602,7 +606,7 @@ void translateIR() {
 
   // Cancel jog if a different non-repeat key appears
   if (momentaryActive && code != 0 && !lastWasRepeat && code != momentaryButton) {
-    Serial.println("Cancelling jog due to new key");
+    Serial.println(F("Cancelling jog due to new key"));
     Stop();
     SetRGBColor("red");
     momentaryActive = false;
@@ -616,7 +620,7 @@ void translateIR() {
   // No new code; if jogging and repeats stopped → timeout
   if (code == 0) {
     if (momentaryActive && (millis() - momentaryLastSeen > momentaryTimeout)) {
-      Serial.println("Jog timeout → STOP");
+      Serial.println(F("Jog timeout → STOP"));
       Stop();
       SetRGBColor("red");
       momentaryActive = false;
@@ -633,12 +637,12 @@ void translateIR() {
     case buttonCHminus:
       {  // Speed -
         if (momentaryActive) {
-          Serial.println("Ignored: CH- during jog");
+          Serial.println(F("Ignored: CH- during jog"));
           break;
         }
         if (UltrasonicOnOff == 0) {
           decreaseStep();
-          Serial.print("Manual Speed Down: ");
+          Serial.print(F("Manual Speed Down: "));
           Serial.println(Speed);
           if (Speed == 0) {
             Stop();
@@ -648,7 +652,7 @@ void translateIR() {
             if (MotorDirection == 2) GoBackward();
           }
         } else {
-          Serial.println("Ignored: Auto-speed active");
+          Serial.println(F("Ignored: Auto-speed active"));
         }
         break;
       }
@@ -658,26 +662,26 @@ void translateIR() {
         if (UltrasonicOnOff == 1) {
           UltrasonicOnOff = 0;
           SetGreenLightValue(0);
-          Serial.println("Switched from AUTO to MANUAL mode");
+          Serial.println(F("Switched from AUTO to MANUAL mode"));
         }
-        Serial.println("STOP pressed → Motors stopped");
+        Serial.println(F("STOP pressed → Motors stopped"));
         SetRGBColor("red");
         MotorDirection = 1;  // default to forward when stopped
         Stop();
         currentStep = 0;
-        Serial.println("Manual mode reset: next CH+ will start at step 1 (≈3.5V)");
+        Serial.println(F("Manual mode reset: next CH+ will start at step 1 (≈3.5V)"));
         break;
       }
 
     case buttonCHplus:
       {  // Speed +
         if (momentaryActive) {
-          Serial.println("Ignored: CH+ during jog");
+          Serial.println(F("Ignored: CH+ during jog"));
           break;
         }
         if (UltrasonicOnOff == 0) {
           increaseStep();
-          Serial.print("Manual Speed Up: ");
+          Serial.print(F("Manual Speed Up: "));
           Serial.println(Speed);
           if (MotorDirection == 1) {
             GoForward();
@@ -688,7 +692,7 @@ void translateIR() {
             SetRGBColor("blue");
           }
         } else {
-          Serial.println("Ignored: Auto-speed active");
+          Serial.println(F("Ignored: Auto-speed active"));
         }
         break;
       }
@@ -702,9 +706,9 @@ void translateIR() {
           momentaryActive = true;
           momentaryButton = buttonBackward;
           momentaryLastSeen = millis();
-          Serial.println("Momentary BACKWARD running (hold to move)");
+          Serial.println(F("Momentary BACKWARD running (hold to move)"));
         } else {
-          Serial.println("Ignored: << only when stationary & not in AUTO");
+          Serial.println(F("Ignored: << only when stationary & not in AUTO"));
         }
         break;
       }
@@ -718,9 +722,9 @@ void translateIR() {
           momentaryActive = true;
           momentaryButton = buttonForward;
           momentaryLastSeen = millis();
-          Serial.println("Momentary FORWARD running (hold to move)");
+          Serial.println(F("Momentary FORWARD running (hold to move)"));
         } else {
-          Serial.println("Ignored: >> only when stationary & not in AUTO");
+          Serial.println(F("Ignored: >> only when stationary & not in AUTO"));
         }
         break;
       }
@@ -730,18 +734,18 @@ void translateIR() {
         UltrasonicOnOff = !UltrasonicOnOff;
         digitalWrite(pinLEDGreen, UltrasonicOnOff ? HIGH : LOW);
         if (UltrasonicOnOff) {
-          Serial.println("Driving started (auto-speed)");
+          Serial.println(F("Driving started (auto-speed)"));
           SetRGBColor("white");
           GoForward();
           playPattern(pattern_double);
         } else {
-          Serial.println("Driving stopped");
+          Serial.println(F("Driving stopped"));
           SetRGBColor("red");
           Stop();
           Speed = 0;
           playPattern(pattern_descend);
           currentStep = 0;
-          Serial.println("Manual mode rearmed: next step = 1 (≈3.5V)");
+          Serial.println(F("Manual mode rearmed: next step = 1 (≈3.5V)"));
         }
         break;
       }
@@ -756,7 +760,7 @@ void translateIR() {
 
     case button100plus:
       {  // Horn
-        Serial.println("Horn activated");
+        Serial.println(F("Horn activated"));
         playPattern(pattern_horn);
         break;
       }
