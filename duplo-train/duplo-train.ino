@@ -106,6 +106,15 @@ int bufferIndex = 0;
 bool bufferFilled = false;
 
 // ================================================================================================
+// Motor speed steps based on battery voltage
+// ================================================================================================
+// Computed PWM values (0–255)
+int pwmSteps[4];   // same size as voltageSteps
+// Desired motor voltages for steps (V)
+float voltageSteps[] = {0.0, 3.5, 4.5, 6.0};
+float batteryVoltage = 0.0;
+
+// ================================================================================================
 // Setup
 // ================================================================================================
 void setup() {
@@ -138,6 +147,14 @@ void setup() {
     SetRGBColor("off");
   }
 
+  // Measure battery at startup
+  batteryVoltage = getBatteryVoltageDirect();
+  Serial.print("Battery measured: ");
+  Serial.println(batteryVoltage, 2);
+
+  // Configure dynamic speed steps
+  configureSpeedSteps();  
+
   IrReceiver.begin(pinIRReceiver); // Start IR Receiver
 
 }
@@ -165,6 +182,56 @@ void loop() {
 
 }
 
+// Measure battery voltage directly
+float getBatteryVoltageDirect() {
+  int raw = analogRead(pinBatterySense);
+  float vOut = raw * 5.0 / 1023.0;
+  return vOut * (R1 + R2) / R2;
+}
+
+// Convert desired motor voltage into PWM duty cycle
+int pwmFromVoltage(float desiredMotorV) {
+  batteryVoltage = getBatteryVoltageDirect();
+  if (batteryVoltage <= 0) return 0;
+  // Clamp to max 6 V effective
+  float vm = min(desiredMotorV, 6.0);
+  int pwm = (int)(255.0 * vm / batteryVoltage);
+  return constrain(pwm, 0, 255);
+}
+
+
+// ================================================================================================
+// Manual speed up / down (use steps instead of fixed increments)
+// ================================================================================================
+int currentStep = 0;   // 0 = stop, 1 = 3V, 2 = 4.5V, 3 = 6V
+
+void applySpeedStep() {
+  Speed = pwmSteps[currentStep];
+  
+  Serial.print("Step ");
+  Serial.print(currentStep);
+  Serial.print(": target ");
+  Serial.print(voltageSteps[currentStep]);
+  Serial.print("V → PWM ");
+  Serial.println(Speed);
+
+  playStepBeep(currentStep);   // 🔊 NEW: sound feedback
+
+  if (Speed == 0) Stop();
+  else if (MotorDirection == 1) GoForward();
+  else if (MotorDirection == 2) GoBackward();
+}
+
+void increaseStep() {
+  if (currentStep < 3) currentStep++;
+  applySpeedStep();
+}
+
+void decreaseStep() {
+  if (currentStep > 0) currentStep--;
+  applySpeedStep();
+}
+
 // ================================================================================================
 // Ultrasonic speed control (auto mode)
 // ================================================================================================
@@ -180,22 +247,11 @@ void SpeedAutoUltrasonic() {
   Serial.print(Distance);
   Serial.println(" cm");
 
-  int targetSpeed = 0;
+  // --- Map distance → effective motor voltage ---
+  float targetV = motorVoltageFromDistance(Distance);
 
-  // --- Safety logic ---
-  if (Distance < 7) {
-    // Immediate stop if too close
-    targetSpeed = 0;
-  }
-  else if (Distance <= 15 ) {
-    // Stay stopped until clear
-    targetSpeed = 0;
-  }
-  else {
-    // Map distance to continuous speed between 60–180
-    int rawSpeed = Distance * 3 + 15;
-    targetSpeed = constrain(rawSpeed, 60, maxSafeSpeed);
-  }
+  // Convert to PWM relative to battery voltage
+  int targetSpeed = pwmFromVoltage(targetV);
 
   // LED indication
   if (targetSpeed == 0) {
@@ -204,7 +260,10 @@ void SpeedAutoUltrasonic() {
   } else {
     SetRGBColor("white"); // moving
     Serial.print("Auto target speed = ");
-    Serial.println(targetSpeed);
+    Serial.print(targetSpeed);
+    Serial.print(" (≈ ");
+    Serial.print(targetV, 2);
+    Serial.println(" V effective)");
   }
 
   updateMotorSpeed(targetSpeed);
@@ -266,6 +325,17 @@ void getBatteryVoltage() {
   Serial.println(vIn, 2);
 }
 
+// Map distance to effective motor voltage (3V → 6V)
+float motorVoltageFromDistance(int distance) {
+  if (distance < 7) return 0.0;    // too close → stop
+  if (distance <= 15) return 0.0;  // stay stopped until clear
+  
+  // Linear mapping: distance → voltage
+  // Example: for distance 20 → ~3V, for large distance → up to 6V
+  float rawV = distance * 0.1 + 1.0;  // tune scaling as needed
+  return constrain(rawV, 3.0, 6.0);
+}
+
 // ================================================================================================
 // Battery status indicator (using LEDs and Buzzer)
 // ================================================================================================
@@ -318,7 +388,8 @@ void translateIR() {
     case buttonCHminus: // Speed -
       GreenLEDBlink();
       if (UltrasonicOnOff == 0) {
-        Speed = decreaseSpeed(Speed, SpeedStep);
+        decreaseStep();
+        //Speed = decreaseSpeed(Speed, SpeedStep);
         Serial.print("Manual Speed Down: ");
         Serial.println(Speed);
         if (Speed == 0) {
@@ -346,12 +417,17 @@ void translateIR() {
       MotorDirection = 1; // stop forces forward direction
       Stop();
       Speed = 0;
+
+      // 🔧 Reset manual mode step
+      currentStep = 0;
+      Serial.println("Manual mode reset: next CH+ will start at step 1 (≈3.5V)");
       break;
 
     case buttonCHplus: // Speed +
       GreenLEDBlink();
       if (UltrasonicOnOff == 0) {
-        Speed = increaseSpeed(Speed, SpeedStep);
+        
+        increaseStep();
         Serial.print("Manual Speed Up: ");
         Serial.println(Speed);
         if (MotorDirection == 1) {
@@ -406,6 +482,10 @@ void translateIR() {
         Stop();
         Speed = 0;
         playPattern(pattern_descend);
+
+        // Reset manual mode to minimal speed step
+        currentStep = 1;   // so next CH+ or CH- starts at lowest speed
+        Serial.println("Manual mode rearmed: next step = 1 (≈3.5V)");
       }
       break;
 
@@ -455,15 +535,6 @@ void translateIR() {
 // ================================================================================================
 // Motor Control
 // ================================================================================================
-int increaseSpeed(int speed, int step) {
-  return min(250, speed + step);
-}
-
-int decreaseSpeed(int speed, int step) {
-  int newSpeed = speed - step;
-  return newSpeed <= 40 ? 0 : newSpeed;
-}
-
 void setMotor(const char* direction, int speed) {
 
   int safeSpeed = constrain(speed, 0, maxSafeSpeed);
@@ -575,6 +646,57 @@ int Distancia_test() {
 int buzzerPattern[40];
 int buzzerIndex = 0;
 unsigned long buzzerTimer = 0;
+
+
+// ================================================================================================
+// Play beep pattern for current step
+// Step 0 = stop (special pattern), Step 1..3 = N short beeps
+// ================================================================================================
+void playStepBeep(int step) {
+  // Clear any old pattern
+  for (int j = 0; j < 20; j++) buzzerPattern[j] = 0;
+
+  int idx = 0;
+  if (step == 0) {
+    // Descending pattern (STOP)
+    buzzerPattern[idx++] = 300; // ON
+    buzzerPattern[idx++] = 200; // OFF
+    buzzerPattern[idx++] = 200; // ON
+    buzzerPattern[idx++] = 300; // OFF
+  } else {
+    // Short beeps = number of step
+    for (int i = 0; i < step; i++) {
+      buzzerPattern[idx++] = 150; // ON
+      buzzerPattern[idx++] = 150; // OFF
+    }
+  }
+  buzzerPattern[idx] = 0;   // terminate
+
+  buzzerIndex = 0;
+  buzzerTimer = millis();
+
+  // Start playback (sound + green LED)
+  if (buzzerPattern[0] > 0) {
+    digitalWrite(pinBuzzer, HIGH);
+    analogWrite(pinLEDGreen, 255); // LED ON
+  } else {
+    digitalWrite(pinBuzzer, LOW);
+    analogWrite(pinLEDGreen, 0);   // LED OFF
+  }
+}
+
+// Setup speed steps (call in setup)
+void configureSpeedSteps() {
+  for (int i = 0; i < 4; i++) {
+    pwmSteps[i] = pwmFromVoltage(voltageSteps[i]);
+  }
+
+  Serial.println("Configured speed steps (PWM values):");
+  for (int i = 0; i < 4; i++) {
+    Serial.print(voltageSteps[i]); Serial.print("V → PWM ");
+    Serial.println(pwmSteps[i]);
+  }
+}
 
 // ================================================================================================
 //Instead of delay() beeping (which would freeze the Arduino), it uses millis() timing and a pattern array 
@@ -740,17 +862,10 @@ void playVoltagePattern(float vIn) {
   buzzerPattern[idx] = 0;
 
   // Start playback
-  buzzerIndex = 0;                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         0;
+  buzzerIndex = 0;
   buzzerTimer = millis();
   if (buzzerPattern[0] > 0) {
     digitalWrite(pinBuzzer, HIGH);
-    analogWrite(pinLEDGreen, 255);  // if you sync the LED
+    analogWrite(pinLEDGreen, 255);  // sync LED
   }
-}
-
-// Get battery voltage
-float getBatteryVoltageDirect() {
-  int raw = analogRead(pinBatterySense);
-  float vOut = raw * 5.0 / 1023.0;
-  return vOut * (R1 + R2) / R2; // adjust (taking into account voltage divider)
 }
