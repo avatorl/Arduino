@@ -307,7 +307,7 @@ void decreaseStep() { if (currentStep > 0) currentStep--; applySpeedStep(); }
 // ================================================================================================
 float motorVoltageFromDistance(int distance) {
   if (distance < 7)  return 0.0;
-  if (distance <= 15) return 0.0;
+  if (distance <= 10) return 0.0;
   float rawV = distance * 0.1 + 1.0;  // tune as needed
   return constrain(rawV, 3.0, 6.0);
 }
