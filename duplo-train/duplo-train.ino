@@ -15,10 +15,6 @@
 // Battery status feedback (in volts, by sound beeps)
 // Sleep mode → powers down automatically after 5 minutes without IR remote input (can be woken up again with the remote)
 
-// To-do / notes:
-// - Wake up from sleep by RC (move IR receiver to D2/D3 if possible)
-// - Print TPU front wheels
-
 // ================================================================================================
 // Electronic components
 //   Arduino Nano 3.0 ATMEGA328 CH340
