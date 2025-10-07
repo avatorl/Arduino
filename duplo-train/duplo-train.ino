@@ -23,10 +23,11 @@
 //   LED RGB R: 100 Ω + 47 Ω, G: 100 Ω, B: 100 Ω
 //   LED Green: 100 Ω + 47 Ω
 //   Voltage divider: 10K Ω and 4.7K Ω
-// ================================================================================================
+// ===============================================================================================
 
 #include <IRremote.hpp> // for IR sensor
 #include <LowPower.h>   // for sleep mode
+#include <math.h>
 
 void SetRGBColor(const char* colorName, int led = 0);
 
@@ -211,7 +212,6 @@ void loop() {
 
 }
 
-
 // ================================================================================================
 // Idle / Sleep
 // ================================================================================================
@@ -269,10 +269,7 @@ void playStepBeep(int step) {
   for (int j = 0; j < 20; j++) buzzerPattern[j] = 0;
   int idx = 0;
   if (step == 0) {
-    buzzerPattern[idx++] = 300; // ON
-    buzzerPattern[idx++] = 200; // OFF
-    buzzerPattern[idx++] = 200; // ON
-    buzzerPattern[idx++] = 300; // OFF
+    // no beep on stop
   } else {
     for (int i = 0; i < step; i++) {
       buzzerPattern[idx++] = 150; // ON
@@ -520,14 +517,13 @@ void translateIR() {
     return;
   }
 
-  GreenLEDBlink();
-
   lastActive = millis();
 
-  switch (code) {
+  // Blink green LED once for any valid button press
+  GreenLEDBlink();
 
+  switch (code) {
     case buttonCHminus: { // Speed -
-      GreenLEDBlink();
       if (momentaryActive) { Serial.println("Ignored: CH- during jog"); break; }
       if (UltrasonicOnOff == 0) {
         decreaseStep();
@@ -545,7 +541,6 @@ void translateIR() {
     }
 
     case buttonCH: { // Stop
-      GreenLEDBlink();
       if (UltrasonicOnOff == 1) {
         UltrasonicOnOff = 0;
         SetGreenLightValue(0);
@@ -561,7 +556,6 @@ void translateIR() {
     }
 
     case buttonCHplus: { // Speed +
-      GreenLEDBlink();
       if (momentaryActive) { Serial.println("Ignored: CH+ during jog"); break; }
       if (UltrasonicOnOff == 0) {
         increaseStep();
@@ -605,7 +599,6 @@ void translateIR() {
     }
 
     case buttonPlayPause: { // Auto-speed toggle
-      GreenLEDBlink();
       UltrasonicOnOff = !UltrasonicOnOff;
       digitalWrite(pinLEDGreen, UltrasonicOnOff ? HIGH : LOW);
       if (UltrasonicOnOff) {
@@ -626,7 +619,6 @@ void translateIR() {
     }
 
     case buttonEQ: { // Mute / Unmute
-      GreenLEDBlink();
       SoundOnOff = !SoundOnOff;
       Serial.println(SoundOnOff ? "Sound ON" : "Sound OFF");
       if (SoundOnOff) playPattern(pattern_double);
@@ -634,14 +626,12 @@ void translateIR() {
     }
 
     case button100plus: { // Horn
-      GreenLEDBlink();
       Serial.println("Horn activated");
       playPattern(pattern_horn);
       break;
     }
 
     case button9: { // Speak battery voltage
-      GreenLEDBlink();
       float vIn = getBatteryVoltageDirect();
       Serial.print("Battery Voltage (pattern): ");
       Serial.println(vIn, 1);
@@ -651,7 +641,6 @@ void translateIR() {
 
     case button0:
     case button200plus:
-      GreenLEDBlink();
       break;
   }
 
@@ -660,6 +649,7 @@ void translateIR() {
     momentaryLastSeen = millis();
   }
 }
+
 
 // ================================================================================================
 // Buzzer (non-blocking pattern player)
