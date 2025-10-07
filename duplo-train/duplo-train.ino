@@ -7,23 +7,29 @@
 // ================================================================================================
 
 // 💡 Features ====================================================================================
-// Red lights → train stationary
-// Blue lights → train moving backward
-// White lights → train moving forward
-// Green top light → obstacle detection mode enabled
-// Horn sound effect
-// Battery status feedback (in volts, by sound beeps)
-// Sleep mode → powers down automatically after 5 minutes without IR remote input (can be woken up again with the remote)
-// TBD v.2: motor over current protection (shunt resistor)
+// 3 speed levels (3.5, 4.5, and 6 volts on the motor)
+// Stop button: stops, red lights
+// Speed up button: speed level +1, moves forward; white lights
+// Speed down button: speed level -1, moves forward until speed level = 0; white lights
+// Move backward button: moves backward at speed level 1 while the button is pressed; blue lights
+// Move forward button: moves forward at speed level 1 while the button is pressed; white lights
+// Auto button: moves forward with obstacle detection enabled. Stops if there is an obstacle.
+//    Moves forward if the obstacle is removed. Speed depends on the distance to the nearest obstacle. White lights and green light.
+// Horn button: horn sound effect
+// Mute button: sound off/on
+// Battery status button: indicates battery level by sound beeps, e.g. 7 long beeps and 3 short beeps = 7.3V
+// Battery status detection: warning level with red lights and sound; shutdown level
+// Sleep mode: powers down automatically after 5 minutes without IR remote input (can be woken up again with the remote)
+// TBD: motor overcurrent protection (shunt resistor)
 // TBD v.2: tilt sensor
 
 // ================================================================================================
 // Electronic components
 //   Arduino Nano 3.0 ATMEGA328 CH340
 //   IR sensor HX1838 with wiring adapter
-//   Active buzzer (with generator)
+//   Active buzzer
 //   2 x RGB LED , 1 x green LED
-//   DC motor, motor driver HG7881 L9110S
+//   DC motor with 1:48 gear, motor driver HG7881 L9110S
 //   Ultrasonic distance sensor HC-SR04
 //
 // Resistors:
