@@ -97,7 +97,7 @@ const float R2 = 4700.0;              // Bottom resistor (to GND)
 const int NMedian   = 5;              // number of samples for median filter
 const int maxSafeSpeed = 180;         // Motor safety speed limit (battery)
 const int distanceStop = 8;          // distance to obstacle <= cm to stop the train
-const int distanceStart = 12;         // distance to obstacle >= cm to re-start the train
+const int distanceStart = 11;         // distance to obstacle >= cm to re-start the train
 const int distanceMaxSpeed = 50;      // distance to obstacle >= cm to run at max speed
 
 // ================================================================================================
