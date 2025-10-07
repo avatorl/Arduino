@@ -2,8 +2,18 @@
 // Train compatible with Lego DUPLO (3D-printed parts + Arduino)
 // Based on: https://cults3d.com/en/3d-model/game/locomotora-sofia-controlada-por-infrarojos-con-control-de-velocidad-por-ultrasonidos-y-motor-superior-multiusos-lego-duplo
 // Arduino code rewritten & extended by Andrzej Leszkiewicz
+// Get the most recent version of the code at https://github.com/avatorl/Arduino/blob/main/duplo-train/duplo-train.ino
 // Printing profile: https://makerworld.com/en/models/1854728-arduino-train-locomotive-remote-controlled#profileId-1983131
 // ================================================================================================
+
+// 💡 Features ====================================================================================
+// Red lights → train stationary
+// Blue lights → train moving backward
+// White lights → train moving forward
+// Green top light → obstacle detection mode enabled
+// Horn sound effect
+// Battery status feedback (in volts, by sound beeps)
+// Sleep mode → powers down automatically after 5 minutes without IR remote input (can be woken up again with the remote)
 
 // To-do / notes:
 // - Wake up from sleep by RC (move IR receiver to D2/D3 if possible)
@@ -69,12 +79,12 @@ const int button9 = 74; // Battery Test
 const int pinBatterySense   = A0;   // Battery voltage monitoring
 const int pinUltrasonicTrig = A3;   // Ultrasonic sensor trigger
 const int pinUltrasonicEcho = A4;   // Ultrasonic sensor echo
-const int pinIRReceiver     = A5;   // IR receiver input
+const int pinIRReceiver     = 2;   // IR receiver input: D2 or D3 required to wake from sleep
 
 const int pinEngineA_1A     = 5;    // Motor direction and speed (PWM)
 const int pinEngineA_1B     = 6;    // Motor direction and speed (PWM)
 
-const int pinLED1_R = 2, pinLED1_G = 3, pinLED1_B = 4;  // RGB LED #1 (ON/OFF only, no PWM required)
+const int pinLED1_R = 11, pinLED1_G = 3, pinLED1_B = 4;  // RGB LED #1 (ON/OFF only, no PWM required)
 const int pinLED2_R = 7, pinLED2_G = 8, pinLED2_B = 9;  // RGB LED #2 (ON/OFF only, no PWM required)
 const int pinLEDGreen       = 10;   // Green LED (PWM required)
 const int pinBuzzer         = 12;   // Active buzzer (with generator)
@@ -126,7 +136,7 @@ bool lastWasRepeat = false;
 
 // Timers
 unsigned long lastActive = 0;
-const unsigned long idleTimeout = 15UL * 60UL * 1000UL; // 15 minutes
+const unsigned long idleTimeout = 5UL * 60UL * 1000UL; // 5 minutes
 
 // Speed steps (voltage → PWM)
 int   pwmSteps[4];                 // 0..3
@@ -232,10 +242,15 @@ void goToIdle() {
   digitalWrite(pinBuzzer, LOW);
 
   Serial.println("Entering sleep mode...");
+
+  attachInterrupt(digitalPinToInterrupt(pinIRReceiver), wakeUp, CHANGE);
   LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
+  detachInterrupt(digitalPinToInterrupt(pinIRReceiver));
 
   lastActive = millis();
 }
+
+void wakeUp() { }
 
 // Measure battery voltage directly
 float getBatteryVoltageDirect() {
