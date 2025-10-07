@@ -252,6 +252,11 @@ void loop() {
     }
   }
 
+  // === Idle timeout check ===
+  if (millis() - lastActive > idleTimeout) {
+    goToIdle();
+  }
+
   // Jog release watchdog (extra safety)
   if (momentaryActive && (millis() - momentaryLastSeen > momentaryTimeout)) {
     Serial.println("Jog watchdog timeout → STOP");
