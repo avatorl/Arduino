@@ -1,9 +1,9 @@
 // ================================================================================================
 // Train compatible with Lego DUPLO (3D-printed parts + Arduino)
 // Based on: https://cults3d.com/en/3d-model/game/locomotora-sofia-controlada-por-infrarojos-con-control-de-velocidad-por-ultrasonidos-y-motor-superior-multiusos-lego-duplo
-// Arduino code rewritten & extended by Andrzej Leszkiewicz
+// Arduino code fully rewritten & extended by Andrzej Leszkiewicz
 // Get the most recent version of the code at https://github.com/avatorl/Arduino/blob/main/duplo-train/duplo-train.ino
-// Printing profile: https://makerworld.com/en/models/1854728-arduino-train-locomotive-remote-controlled#profileId-1983131
+// 3D-printing profile: https://makerworld.com/en/models/1854728-arduino-train-locomotive-remote-controlled#profileId-1983131
 // ================================================================================================
 
 // 💡 Features ====================================================================================
