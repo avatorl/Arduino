@@ -131,8 +131,8 @@ const int AUTO_SAMPLES_FOR_MEDIAN = 5;                 // number of samples for 
 const int AUTO_DISTANCE_STOP = 8;            // distance to obstacle <= cm to stop the train
 const int AUTO_DISTANCE_RESTART = 11;          // distance to obstacle >= cm to re-start the train
 const int AUTO_DISTANCE_MAX_SPEED = 50;       // distance to obstacle >= cm to run at max speed
-const float BATTERY_LOW_WARNING = 6.6;      // warn at this voltage
-const float BATTERY_LOW_SHUTDOWN = 6.4;      // force stop at this voltage
+const float BATTERY_LOW_WARNING = 7.4;      // warn at this voltage
+const float BATTERY_LOW_SHUTDOWN = 7.2;      // force stop at this voltage
 const float MAX_SAFE_MOTOR_VOLTAGE = 6.0;
 
 // ================================================================================================
@@ -274,13 +274,17 @@ void loop() {
   // === 1. Battery monitor first (critical safety) ===
   float vNow = getBatteryVoltageDirect();
   if (vNow < BATTERY_LOW_SHUTDOWN) {
+
     DBGLN(F("Battery critically low → stopping train"));
+
     Stop();
-    SetRGBColor("red");
-    playPattern(pattern_descend);  // sad beep
-    while (true) {
-      LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
-    }
+    SetRGBColor("off");
+    SetGreenLightValue(0);
+    digitalWrite(pinBuzzer, LOW); // end beep
+    buzzerPattern[0] = 0;
+    buzzerIndex = 0;
+    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
+
   } else if (vNow < BATTERY_LOW_WARNING) {
     static unsigned long lastWarn = 0;
     if (millis() - lastWarn > 60000) {  // warn max once per minute
