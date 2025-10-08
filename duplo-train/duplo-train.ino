@@ -39,7 +39,7 @@
 //   Voltage divider: 10K Ω and 4.7K Ω
 // ===============================================================================================
 
-#define DEBUG 0
+#define DEBUG 1
 #if DEBUG
   #define DBG(...)   Serial.print(__VA_ARGS__)
   #define DBGLN(...) Serial.println(__VA_ARGS__)
@@ -132,8 +132,23 @@ const int AUTO_DISTANCE_STOP = 8;            // distance to obstacle <= cm to st
 const int AUTO_DISTANCE_RESTART = 11;          // distance to obstacle >= cm to re-start the train
 const int AUTO_DISTANCE_MAX_SPEED = 50;       // distance to obstacle >= cm to run at max speed
 const float BATTERY_LOW_WARNING = 7.4;      // warn at this voltage
-const float BATTERY_LOW_SHUTDOWN = 7.2;      // force stop at this voltage
+const float BATTERY_LOW_SAVER = 7.2;      // disable LEDs and sounds
+const float BATTERY_LOW_SHUTDOWN = 7.0;      // force stop at this voltage
 const float MAX_SAFE_MOTOR_VOLTAGE = 6.0;
+
+const float BATTERY_HYST_V      = 0.10; // Hysteresis: voltage must rise this much to exit a level
+// Debounce / hold times
+const unsigned long BATTERY_LOW_WARNING_MS     = 3000;
+const unsigned long BATTERY_LOW_SAVER_MS    = 1500;
+const unsigned long BATTERY_LOW_SHUTDOWN_MS      = 1000;
+
+// Battery manager globals — define ONCE
+enum BatState { BAT_OK, BAT_WARN, BAT_SAVER, BAT_OFF };
+BatState batState = BAT_OK;
+BatState lastBatState = BAT_OK;   // track transitions for warning beeps
+bool saverMode = false;
+unsigned long tWarn = 0, tSaver = 0, tOff = 0;
+unsigned long warnBeepTimer = 0;   // for periodic beep in BAT_WARN
 
 // ================================================================================================
 // Control variables
@@ -271,28 +286,7 @@ void loop() {
 //     overCurrentActive = false; // reset if current goes back to normal
 //   }
 
-  // === 1. Battery monitor first (critical safety) ===
-  float vNow = getBatteryVoltageDirect();
-  if (vNow < BATTERY_LOW_SHUTDOWN) {
-
-    DBGLN(F("Battery critically low → stopping train"));
-
-    Stop();
-    SetRGBColor("off");
-    SetGreenLightValue(0);
-    digitalWrite(pinBuzzer, LOW); // end beep
-    buzzerPattern[0] = 0;
-    buzzerIndex = 0;
-    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
-
-  } else if (vNow < BATTERY_LOW_WARNING) {
-    static unsigned long lastWarn = 0;
-    if (millis() - lastWarn > 60000) {  // warn max once per minute
-      DBGLN(F("Battery low warning"));
-      playPattern(pattern_batteryWarn);
-      lastWarn = millis();
-    }
-  }
+  updateBatteryManager();
 
   // === 2. Idle timeout watchdog ===
   if (millis() - lastActive > idleTimeout) {
@@ -900,6 +894,7 @@ void updateBuzzer() {
 // ------------------------------------------------------------------------------------------------
 void playPattern(const int* pattern) {
   if (SoundOnOff != 1) return;
+  if (saverMode) return;
 
   digitalWrite(pinBuzzer, LOW);  // ensure buzzer off first
 
@@ -925,6 +920,7 @@ void playPattern(const int* pattern) {
 // ------------------------------------------------------------------------------------------------
 void playVoltagePattern(float vIn) {
   if (SoundOnOff != 1) return;   // respect mute
+
   digitalWrite(pinBuzzer, LOW);  // ensure buzzer off first
 
   int volts = (int)floor(vIn);
@@ -1018,6 +1014,7 @@ void SetRGBColor(const char* colorName, int led) {
 
 void updateSiren() {
   if (!sirenActive) return;
+  if (saverMode) { noTone(pinBuzzer); return; }
 
   unsigned long now = millis();
 
@@ -1052,4 +1049,77 @@ void updateSiren() {
   // Sound part only if not muted
   if (SoundOnOff == 1) tone(pinBuzzer, f);
   else                 noTone(pinBuzzer);
+}
+
+void updateBatteryManager() {
+  float v = getBatteryVoltageDirect();
+
+  // --- Descend with debounce (under-voltage path) ---
+  if (v < BATTERY_LOW_SHUTDOWN) {
+    if (!tOff) tOff = millis();
+    if (millis() - tOff >= BATTERY_LOW_SHUTDOWN_MS) batState = BAT_OFF;
+  } else {
+    tOff = 0;
+    if (v < BATTERY_LOW_SAVER) {
+      if (!tSaver) tSaver = millis();
+      if (millis() - tSaver >= BATTERY_LOW_SAVER_MS) batState = BAT_SAVER;
+    } else {
+      tSaver = 0;
+      if (v < BATTERY_LOW_WARNING) {
+        if (!tWarn) tWarn = millis();
+        if (millis() - tWarn >= BATTERY_LOW_WARNING_MS) batState = BAT_WARN;
+      } else {
+        tWarn = 0;
+
+        // --- Recover upward with hysteresis (rise in voltage) ---
+        if (batState == BAT_WARN  && v > (BATTERY_LOW_WARNING  + BATTERY_HYST_V)) batState = BAT_OK;
+        if (batState == BAT_SAVER && v > (BATTERY_LOW_SAVER    + BATTERY_HYST_V)) batState = BAT_WARN;   // step up one level
+        if (batState == BAT_OFF   && v > (BATTERY_LOW_SHUTDOWN + BATTERY_HYST_V)) batState = BAT_SAVER;  // step up one level
+      }
+    }
+  }
+
+  // --- On state change: one-time actions / beep ---
+  if (batState != lastBatState) {
+    if (batState == BAT_WARN && SoundOnOff == 1 && !saverMode) {
+      playPattern(pattern_batteryWarn);  // immediate beep on entering WARN
+    }
+    warnBeepTimer = millis();  // reset periodic timer on any transition
+    lastBatState = batState;
+  }
+
+  // --- Enforce behaviors for each state ---
+  switch (batState) {
+    case BAT_OK:
+      saverMode = false;
+      break;
+
+    case BAT_WARN:
+      // Periodic reminder (every 60s) while in WARN
+      if (!saverMode && SoundOnOff == 1 && (millis() - warnBeepTimer) >= 60000UL) {
+        playPattern(pattern_batteryWarn);
+        warnBeepTimer = millis();
+      }
+      break;
+
+    case BAT_SAVER:
+      // Enter power-saver: mute extras and cap speed
+      saverMode = true;
+      SetRGBColor("off");
+      SetGreenLightValue(0);            // kill green status LED
+      if (currentStep > 2) {            // cap manual to step 2
+        currentStep = 2;
+        applySpeedStep();
+      }
+      break;
+
+    case BAT_OFF:
+      // Hard stop & deep sleep
+      Stop();
+      SetRGBColor("off");
+      SetGreenLightValue(0);
+      while (true) {
+        LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
+      }
+  }
 }
