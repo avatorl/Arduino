@@ -891,10 +891,13 @@ void updateBuzzer() {
   }
 }
 
+// ------------------------------------------------------------------------------------------------
+// Initiate one of the predefined sound patterns. Then updateBuzzer plays the pattern.
+// ------------------------------------------------------------------------------------------------
 void playPattern(const int* pattern) {
   if (SoundOnOff != 1) return;
 
-  digitalWrite(pinBuzzer, LOW);  // 🔹 ensure buzzer off first
+  digitalWrite(pinBuzzer, LOW);  // ensure buzzer off first
 
   for (int j = 0; j < 10; j++) buzzerPattern[j] = 0;
 
@@ -911,6 +914,11 @@ void playPattern(const int* pattern) {
   if (buzzerPattern[0] > 0) digitalWrite(pinBuzzer, HIGH);
 }
 
+// ------------------------------------------------------------------------------------------------
+// Initiate battery voltage sound pattern. Then updateBuzzer plays the pattern.
+//    - long beeps for integer volts
+//     - short beeps for tenths
+// ------------------------------------------------------------------------------------------------
 void playVoltagePattern(float vIn) {
   if (SoundOnOff != 1) return;   // respect mute
   digitalWrite(pinBuzzer, LOW);  // ensure buzzer off first
@@ -948,6 +956,7 @@ void playVoltagePattern(float vIn) {
 // ================================================================================================
 // LEDs
 // ================================================================================================
+
 void SetRGB1Light(bool R, bool G, bool B) {
   if (FrontLightOnOff == 0) return;
   digitalWrite(pinLED1_R, R ? LOW : HIGH);
