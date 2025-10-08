@@ -128,12 +128,12 @@ const unsigned long DIR_DELAY = 1000;  // delay before motor direction change, m
 const float R1 = 10000.0;              // Top resistor (to battery +)
 const float R2 = 4700.0;               // Bottom resistor (to GND)
 const int AUTO_SAMPLES_FOR_MEDIAN = 5;                 // number of samples for median filter
-const int MAX_SAFE_SPEED = 180;          // Motor safety speed limit (battery)
 const int AUTO_DISTANCE_STOP = 8;            // distance to obstacle <= cm to stop the train
 const int AUTO_DISTANCE_RESTART = 11;          // distance to obstacle >= cm to re-start the train
 const int AUTO_DISTANCE_MAX_SPEED = 50;       // distance to obstacle >= cm to run at max speed
 const float BATTERY_LOW_WARNING = 6.6;      // warn at this voltage
 const float BATTERY_LOW_SHUTDOWN = 6.4;      // force stop at this voltage
+const float MAX_SAFE_MOTOR_VOLTAGE = 6.0;
 
 // ================================================================================================
 // Control variables
@@ -168,7 +168,6 @@ const unsigned long idleTimeout = 5UL * 60UL * 1000UL;  // 5 minutes
 int pwmSteps[4];  // 0..3
 float voltageSteps[] = { 0.0, 3.5, 4.5, 6.0 };
 float batteryVoltage = 0.0;
-const float maxSafeVoltage = 6.0;
 
 // Buzzer player
 int buzzerPattern[20];
@@ -356,11 +355,11 @@ float getBatteryVoltageDirect() {
 }
 
 // Convert desired motor voltage into PWM duty cycle
-int pwmFromVoltage(float desiredMotorV) {
+int safePWMFromVoltage(float desiredMotorV) {
   batteryVoltage = getBatteryVoltageDirect();
   if (batteryVoltage <= 0) return 0;
   // Clamp to max 6 V effective
-  float vm = min(desiredMotorV, maxSafeVoltage);
+  float vm = min(desiredMotorV, MAX_SAFE_MOTOR_VOLTAGE);
   int pwm = (int)(255.0 * vm / batteryVoltage);
   return constrain(pwm, 0, 255);
 }
@@ -379,11 +378,11 @@ int pwmFromVoltage(float desiredMotorV) {
 // ================================================================================================
 void configureSpeedSteps() {
   for (int i = 0; i < 4; i++) {
-    pwmSteps[i] = pwmFromVoltage(min(maxSafeVoltage, voltageSteps[i]));
+    pwmSteps[i] = safePWMFromVoltage(voltageSteps[i]);
   }
   DBGLN(F("Configured speed steps (PWM values):"));
   for (int i = 0; i < 4; i++) {
-    DBG(min(maxSafeVoltage, voltageSteps[i]));
+    DBG(min(MAX_SAFE_MOTOR_VOLTAGE, voltageSteps[i]));
     DBG(F("V → PWM "));
     DBGLN(pwmSteps[i]);
   }
@@ -442,8 +441,8 @@ float motorVoltageFromDistance(int distance) {
   if (distance <= AUTO_DISTANCE_RESTART) return 0.0;
 
   int lastIdx = sizeof(voltageSteps) / sizeof(voltageSteps[0]) - 1;
-  float minV = min(maxSafeVoltage, voltageSteps[1]);        // ≈3.5V
-  float maxV = min(maxSafeVoltage, voltageSteps[lastIdx]);  // ≈6.0V
+  float minV = min(MAX_SAFE_MOTOR_VOLTAGE, voltageSteps[1]);        // ≈3.5V
+  float maxV = min(MAX_SAFE_MOTOR_VOLTAGE, voltageSteps[lastIdx]);  // ≈6.0V
 
   if (distance < AUTO_DISTANCE_MAX_SPEED) {
     float spanV = (maxV - minV);
@@ -462,7 +461,7 @@ void SpeedAutoUltrasonic() {
   DBGLN(F(" cm"));
 
   float targetV = motorVoltageFromDistance(Distance);
-  int targetSpeed = pwmFromVoltage(targetV);
+  int targetSpeed = safePWMFromVoltage(targetV);
 
   if (targetSpeed == 0) {
     SetRGBColor("red");
@@ -648,14 +647,14 @@ void Stop() {
 }
 
 // Jog motor (doesn’t affect MotorDirection or Speed state)
-void JogDrive(const char* direction, int speed) {
-  int safeSpeed = constrain(speed, 0, MAX_SAFE_SPEED);
+void JogDrive(const char* direction) {
+  int jogPWM = pwmSteps[1]; // speed level 1
   if (strcmp(direction, "forward") == 0) {
-    analogWrite(pinEngineA_1A, safeSpeed);
+    analogWrite(pinEngineA_1A, jogPWM);
     analogWrite(pinEngineA_1B, 0);
   } else if (strcmp(direction, "backward") == 0) {
     analogWrite(pinEngineA_1A, 0);
-    analogWrite(pinEngineA_1B, safeSpeed);
+    analogWrite(pinEngineA_1B, jogPWM);
   } else {
     analogWrite(pinEngineA_1A, 0);
     analogWrite(pinEngineA_1B, 0);
@@ -764,8 +763,7 @@ void translateIR() {
     case buttonBackward:
       {  // << momentary backward (jog)
         if (UltrasonicOnOff == 0 && Speed == 0) {
-          int pwm = pwmSteps[1];
-          JogDrive("backward", pwm);
+          JogDrive("backward");
           SetRGBColor("blue");
           momentaryActive = true;
           momentaryButton = buttonBackward;
@@ -780,8 +778,7 @@ void translateIR() {
     case buttonForward:
       {  // >> momentary forward (jog)
         if (UltrasonicOnOff == 0 && Speed == 0) {
-          int pwm = pwmSteps[1];
-          JogDrive("forward", pwm);
+          JogDrive("forward");
           SetRGBColor("white");
           momentaryActive = true;
           momentaryButton = buttonForward;
