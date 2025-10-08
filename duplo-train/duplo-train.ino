@@ -109,7 +109,7 @@ const int pinEngineA_1A = 5;                             // Motor direction and 
 const int pinEngineA_1B = 6;                             // Motor direction and speed (PWM)
 const int pinLED1_R = 11, pinLED1_G = 3, pinLED1_B = 4;  // RGB LED #1 (ON/OFF only, no PWM required)
 const int pinLED2_R = 7, pinLED2_G = 8, pinLED2_B = 9;   // RGB LED #2 (ON/OFF only, no PWM required)
-const int pinLEDGreen = 10;                              // Green LED (PWM required)
+const int pinLEDGreen = 10;                              // Green LED (no PWM required)
 const int pinBuzzer = 12;                                // Active buzzer (with generator)
 
 // ================================================================================================
@@ -119,7 +119,7 @@ const int pattern_melody[] = { 150, 80, 200, 80, 250, 80, 300, 150, 250, 0 };
 const int pattern_batteryWarn[] = { 3000, 100, 0 };
 const int pattern_double[] = { 150, 100, 150, 0 };
 const int pattern_descend[] = { 120, 80, 120, 80, 120, 0 };
-const int pattern_horn[] = { 400, 200, 400, 200, 400, 0 };
+const int pattern_horn[] = { 1000, 100, 0 };
 
 // ================================================================================================
 // Other constants
@@ -127,13 +127,13 @@ const int pattern_horn[] = { 400, 200, 400, 200, 400, 0 };
 const unsigned long DIR_DELAY = 1000;  // delay before motor direction change, ms
 const float R1 = 10000.0;              // Top resistor (to battery +)
 const float R2 = 4700.0;               // Bottom resistor (to GND)
-const int NMedian = 5;                 // number of samples for median filter
-const int maxSafeSpeed = 180;          // Motor safety speed limit (battery)
-const int distanceStop = 8;            // distance to obstacle <= cm to stop the train
-const int distanceStart = 11;          // distance to obstacle >= cm to re-start the train
-const int distanceMaxSpeed = 50;       // distance to obstacle >= cm to run at max speed
-const float lowBatteryWarn = 6.6;      // warn at this voltage
-const float lowBatteryStop = 6.4;      // force stop at this voltage
+const int AUTO_SAMPLES_FOR_MEDIAN = 5;                 // number of samples for median filter
+const int MAX_SAFE_SPEED = 180;          // Motor safety speed limit (battery)
+const int AUTO_DISTANCE_STOP = 8;            // distance to obstacle <= cm to stop the train
+const int AUTO_DISTANCE_RESTART = 11;          // distance to obstacle >= cm to re-start the train
+const int AUTO_DISTANCE_MAX_SPEED = 50;       // distance to obstacle >= cm to run at max speed
+const float BATTERY_LOW_WARNING = 6.6;      // warn at this voltage
+const float BATTERY_LOW_SHUTDOWN = 6.4;      // force stop at this voltage
 
 // ================================================================================================
 // Control variables
@@ -146,7 +146,7 @@ int Speed = 0;            // stopped at start
 int Distance = 0;         // Latest distance from ultrasonic
 
 // --- Distance median filter state ---
-int distanceBuffer[NMedian];
+int distanceBuffer[AUTO_SAMPLES_FOR_MEDIAN];
 int bufferIndex = 0;
 bool bufferFilled = false;
 
@@ -274,7 +274,7 @@ void loop() {
 
   // === 1. Battery monitor first (critical safety) ===
   float vNow = getBatteryVoltageDirect();
-  if (vNow < lowBatteryStop) {
+  if (vNow < BATTERY_LOW_SHUTDOWN) {
     DBGLN(F("Battery critically low → stopping train"));
     Stop();
     SetRGBColor("red");
@@ -282,7 +282,7 @@ void loop() {
     while (true) {
       LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
     }
-  } else if (vNow < lowBatteryWarn) {
+  } else if (vNow < BATTERY_LOW_WARNING) {
     static unsigned long lastWarn = 0;
     if (millis() - lastWarn > 60000) {  // warn max once per minute
       DBGLN(F("Battery low warning"));
@@ -438,17 +438,17 @@ void decreaseStep() {
 // ================================================================================================
 
 float motorVoltageFromDistance(int distance) {
-  if (distance < distanceStop) return 0.0;
-  if (distance <= distanceStart) return 0.0;
+  if (distance < AUTO_DISTANCE_STOP) return 0.0;
+  if (distance <= AUTO_DISTANCE_RESTART) return 0.0;
 
   int lastIdx = sizeof(voltageSteps) / sizeof(voltageSteps[0]) - 1;
   float minV = min(maxSafeVoltage, voltageSteps[1]);        // ≈3.5V
   float maxV = min(maxSafeVoltage, voltageSteps[lastIdx]);  // ≈6.0V
 
-  if (distance < distanceMaxSpeed) {
+  if (distance < AUTO_DISTANCE_MAX_SPEED) {
     float spanV = (maxV - minV);
-    float spanD = (float)(distanceMaxSpeed - distanceStart);
-    float rawV = minV + (distance - distanceStart) * (spanV / spanD);
+    float spanD = (float)(AUTO_DISTANCE_MAX_SPEED - AUTO_DISTANCE_RESTART);
+    float rawV = minV + (distance - AUTO_DISTANCE_RESTART) * (spanV / spanD);
     return constrain(rawV, minV, maxV);
   }
   return maxV;  // ≥ 50 cm → full speed
@@ -509,17 +509,17 @@ int Distancia_test() {
 
   // Timeout derived from max distance (≈58 µs per cm) with 1.25x margin
   const unsigned long echoTimeoutUs =
-      (unsigned long)(distanceMaxSpeed * 58UL * 5 / 4);
+      (unsigned long)(AUTO_DISTANCE_MAX_SPEED * 58UL * 5 / 4);
 
   // Read echo with timeout
   unsigned long duration = pulseIn(pinUltrasonicEcho, HIGH, echoTimeoutUs);
 
   // No echo → treat as "far enough"
-  if (duration == 0) return distanceMaxSpeed;
+  if (duration == 0) return AUTO_DISTANCE_MAX_SPEED;
 
   // Convert to cm and clamp
   int cm = (int)(duration / 58UL);
-  if (cm > distanceMaxSpeed) cm = distanceMaxSpeed;
+  if (cm > AUTO_DISTANCE_MAX_SPEED) cm = AUTO_DISTANCE_MAX_SPEED;
   return cm;
 }
 
@@ -533,11 +533,11 @@ int getMedianDistance() {
 
   int raw = Distancia_test();         // raw single measurement
   distanceBuffer[bufferIndex] = raw;  // insert into buffer
-  bufferIndex = (bufferIndex + 1) % NMedian;
+  bufferIndex = (bufferIndex + 1) % AUTO_SAMPLES_FOR_MEDIAN;
   if (bufferIndex == 0) bufferFilled = true;
 
-  int size = bufferFilled ? NMedian : bufferIndex;
-  int temp[NMedian];
+  int size = bufferFilled ? AUTO_SAMPLES_FOR_MEDIAN : bufferIndex;
+  int temp[AUTO_SAMPLES_FOR_MEDIAN];
   for (int i = 0; i < size; i++) temp[i] = distanceBuffer[i];
 
   // simple bubble sort for median
@@ -649,7 +649,7 @@ void Stop() {
 
 // Jog motor (doesn’t affect MotorDirection or Speed state)
 void JogDrive(const char* direction, int speed) {
-  int safeSpeed = constrain(speed, 0, maxSafeSpeed);
+  int safeSpeed = constrain(speed, 0, MAX_SAFE_SPEED);
   if (strcmp(direction, "forward") == 0) {
     analogWrite(pinEngineA_1A, safeSpeed);
     analogWrite(pinEngineA_1B, 0);
