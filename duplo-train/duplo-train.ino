@@ -16,6 +16,7 @@
 // Auto button: moves forward with obstacle detection enabled. Stops if there is an obstacle.
 //    Moves forward if the obstacle is removed. Speed depends on the distance to the nearest obstacle. White lights and green light.
 // Horn button: horn sound effect
+// Siren button: red and blue lights, siren sounds
 // Mute button: sound off/on
 // Battery status button: indicates battery level by sound beeps, e.g. 7 long beeps and 3 short beeps = 7.3V
 // Battery status detection: warning level with red lights and sound; shutdown level
@@ -38,10 +39,30 @@
 //   Voltage divider: 10K Ω and 4.7K Ω
 // ===============================================================================================
 
-#include <IRremote.hpp>  // for IR sensor
-#include <LowPower.h>    // for sleep mode
+#define DEBUG 0
+#if DEBUG
+  #define DBG(...)   Serial.print(__VA_ARGS__)
+  #define DBGLN(...) Serial.println(__VA_ARGS__)
+  #define DBGBEGIN(...) do { Serial.begin(__VA_ARGS__); } while(0)
+#else
+  #define DBG(...)
+  #define DBGLN(...)
+  #define DBGBEGIN(...)
+#endif
+
+#ifndef STR_HELPER
+  #define STR_HELPER(x) #x
+#endif
+#ifndef STR
+  #define STR(x) STR_HELPER(x)
+#endif
+
+#define IR_USE_AVR_TIMER1 // move IRremote to Timer1
+#include <IRremote.hpp>   // for IR sensor
+#include <LowPower.h>     // for sleep mode
 #include <math.h>
 
+void SetRGBLightColor(const char* colorName, int led = 0);
 void SetRGBColor(const char* colorName, int led = 0);
 
 // ================================================================================================
@@ -65,8 +86,8 @@ const int buttonForward = 64;    // Momentary forward
 const int buttonPlayPause = 67;  // Auto-speed toggle, start/stop
 const int buttonEQ = 9;          // Mute / Unmute
 const int button0 = 22;
-const int button100plus = 25;  // Horn
-const int button200plus = 13;
+const int button100plus = 25;   // Horn
+const int button200plus = 13;   // Siren
 const int button1 = 12;
 const int button2 = 24;
 const int button3 = 94;
@@ -154,6 +175,10 @@ int buzzerPattern[20];
 int buzzerIndex = 0;
 unsigned long buzzerTimer = 0;
 
+// add near siren globals
+unsigned long sirenStepTimer = 0;
+const uint16_t sirenStepEveryMs = 10;   // change pitch every 10 ms
+
 // Manual step index
 int currentStep = 0;  // 0=stop, 1=~3.5V, 2=~4.5V, 3=~6V
 
@@ -166,11 +191,25 @@ int currentStep = 0;  // 0=stop, 1=~3.5V, 2=~4.5V, 3=~6V
 // unsigned long overCurrentStart = 0;
 // bool overCurrentActive = false;
 
+// Siren state
+bool sirenActive = false;
+unsigned long sirenTimer = 0;
+int sirenPhase = 0;     // 0=LED1 red, 1=LED1 blue
+int sirenFreq = 400;
+int sirenDirection = 1; // 1 = up, -1 = down
+
+// Siren timing (time-based sweep → stable even with loop jitter)
+const int  sirenFmin = 400;
+const int  sirenFmax = 800;
+const unsigned long sirenSweepMs = 800;       // up in 800 ms, down in 800 ms
+unsigned long sirenStartMs = 0;               // set when siren toggles ON
+
 // ================================================================================================
 // Setup
 // ================================================================================================
 void setup() {
-  Serial.begin(9600);
+
+  DBGBEGIN(9600);
 
   // Initialize Arduino pins
   pinMode(pinLEDGreen, OUTPUT);
@@ -194,8 +233,8 @@ void setup() {
 
   // Measure battery at startup
   batteryVoltage = getBatteryVoltageDirect();
-  Serial.print(F("Battery measured: "));
-  Serial.println(batteryVoltage, 2);
+  DBG(F("Battery measured: "));
+  DBGLN(batteryVoltage, 2);
 
   // Configure dynamic speed steps
   configureSpeedSteps();
@@ -217,9 +256,9 @@ void loop() {
 //       overCurrentStart = millis();
 //     } else {
 //       if (millis() - overCurrentStart > 200) { // >200 ms continuous
-//         Serial.print(F("⚠️ Motor Overcurrent: "));
-//         Serial.print(motorCurrent, 2);
-//         Serial.println(F(" A → STOPPING!"));
+//         DBG(F("⚠️ Motor Overcurrent: "));
+//         DBG(motorCurrent, 2);
+//         DBGLN(F(" A → STOPPING!"));
 
 //         Stop();
 //         SetRGBColor("red");
@@ -236,7 +275,7 @@ void loop() {
   // === 1. Battery monitor first (critical safety) ===
   float vNow = getBatteryVoltageDirect();
   if (vNow < lowBatteryStop) {
-    Serial.println(F("Battery critically low → stopping train"));
+    DBGLN(F("Battery critically low → stopping train"));
     Stop();
     SetRGBColor("red");
     playPattern(pattern_descend);  // sad beep
@@ -246,7 +285,7 @@ void loop() {
   } else if (vNow < lowBatteryWarn) {
     static unsigned long lastWarn = 0;
     if (millis() - lastWarn > 60000) {  // warn max once per minute
-      Serial.println(F("Battery low warning"));
+      DBGLN(F("Battery low warning"));
       playPattern(pattern_batteryWarn);
       lastWarn = millis();
     }
@@ -259,7 +298,7 @@ void loop() {
 
   // === 3. Jog watchdog (safety if button released) ===
   if (momentaryActive && (millis() - momentaryLastSeen > momentaryTimeout)) {
-    Serial.println(F("Jog watchdog timeout → STOP"));
+    DBGLN(F("Jog watchdog timeout → STOP"));
     Stop();
     SetRGBColor("red");
     momentaryActive = false;
@@ -273,8 +312,9 @@ void loop() {
   // === 5. IR remote handler ===
   translateIR();
 
-  // === 6. Buzzer non-blocking playback ===
+  // Non-blocking playback ===
   updateBuzzer();
+  updateSiren();
 
   delay(10); // small loop delay
 
@@ -284,7 +324,7 @@ void loop() {
 // Idle / Sleep
 // ================================================================================================
 void goToIdle() {
-  Serial.println(F("Idle: turning everything off..."));
+  DBGLN(F("Idle: turning everything off..."));
 
   digitalWrite(pinBuzzer, LOW);
   buzzerPattern[0] = 0;
@@ -297,7 +337,7 @@ void goToIdle() {
   delay(2000);
   digitalWrite(pinBuzzer, LOW);
 
-  Serial.println(F("Entering sleep mode..."));
+  DBGLN(F("Entering sleep mode..."));
 
   attachInterrupt(digitalPinToInterrupt(pinIRReceiver), wakeUp, CHANGE);
   LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
@@ -329,9 +369,9 @@ int pwmFromVoltage(float desiredMotorV) {
 //   int raw = analogRead(pinMotorSense);
 //   float vSense = (raw * 5.0) / 1023.0;     // voltage across shunt
 //   return vSense / shuntResistor;           // I = V / R
-//   Serial.print(F("Motor current = "));
-//   Serial.print(iNow, 2);
-//   Serial.println(F(" A"));
+//   DBG(F("Motor current = "));
+//   DBG(iNow, 2);
+//   DBGLN(F(" A"));
 // }
 
 // ================================================================================================
@@ -341,11 +381,11 @@ void configureSpeedSteps() {
   for (int i = 0; i < 4; i++) {
     pwmSteps[i] = pwmFromVoltage(min(maxSafeVoltage, voltageSteps[i]));
   }
-  Serial.println(F("Configured speed steps (PWM values):"));
+  DBGLN(F("Configured speed steps (PWM values):"));
   for (int i = 0; i < 4; i++) {
-    Serial.print(min(maxSafeVoltage, voltageSteps[i]));
-    Serial.print(F("V → PWM "));
-    Serial.println(pwmSteps[i]);
+    DBG(min(maxSafeVoltage, voltageSteps[i]));
+    DBG(F("V → PWM "));
+    DBGLN(pwmSteps[i]);
   }
 }
 
@@ -370,12 +410,12 @@ void playStepBeep(int step) {
 void applySpeedStep() {
   Speed = pwmSteps[currentStep];
 
-  Serial.print(F("Step "));
-  Serial.print(currentStep);
-  Serial.print(F(": target "));
-  Serial.print(voltageSteps[currentStep]);
-  Serial.print(F("V → PWM "));
-  Serial.println(Speed);
+  DBG(F("Step "));
+  DBG(currentStep);
+  DBG(F(": target "));
+  DBG(voltageSteps[currentStep]);
+  DBG(F("V → PWM "));
+  DBGLN(Speed);
 
   playStepBeep(currentStep);
 
@@ -417,23 +457,23 @@ float motorVoltageFromDistance(int distance) {
 void SpeedAutoUltrasonic() {
   Distance = getMedianDistance();
 
-  Serial.print(F("Ultrasonic Distance: "));
-  Serial.print(Distance);
-  Serial.println(F(" cm"));
+  DBG(F("Ultrasonic Distance: "));
+  DBG(Distance);
+  DBGLN(F(" cm"));
 
   float targetV = motorVoltageFromDistance(Distance);
   int targetSpeed = pwmFromVoltage(targetV);
 
   if (targetSpeed == 0) {
     SetRGBColor("red");
-    Serial.println(F("Auto: STOP"));
+    DBGLN(F("Auto: STOP"));
   } else {
     SetRGBColor("white");
-    Serial.print(F("Auto target speed = "));
-    Serial.print(targetSpeed);
-    Serial.print(" (≈ ");
-    Serial.print(targetV, 2);
-    Serial.println(" V)");
+    DBG(F("Auto target speed = "));
+    DBG(targetSpeed);
+    DBG(" (≈ ");
+    DBG(targetV, 2);
+    DBGLN(" V)");
   }
 
   updateMotorSpeed(targetSpeed);
@@ -462,20 +502,35 @@ void updateMotorSpeed(int targetSpeed) {
 }
 
 int Distancia_test() {
+  // Trigger 10 µs pulse
   digitalWrite(pinUltrasonicTrig, HIGH);
   delayMicroseconds(10);
   digitalWrite(pinUltrasonicTrig, LOW);
 
-  // timeout = 100 ms
-  long duration = pulseIn(pinUltrasonicEcho, HIGH, 100000L);
+  // Timeout derived from max distance (≈58 µs per cm) with 1.25x margin
+  const unsigned long echoTimeoutUs =
+      (unsigned long)(distanceMaxSpeed * 58UL * 5 / 4);
 
-  if (duration == 0) return distanceMaxSpeed;  // no echo → treat as "far enough"
+  // Read echo with timeout
+  unsigned long duration = pulseIn(pinUltrasonicEcho, HIGH, echoTimeoutUs);
 
-  int cm = (int)(duration / 58);
-  return min(cm, distanceMaxSpeed);  // cap at 50 cm
+  // No echo → treat as "far enough"
+  if (duration == 0) return distanceMaxSpeed;
+
+  // Convert to cm and clamp
+  int cm = (int)(duration / 58UL);
+  if (cm > distanceMaxSpeed) cm = distanceMaxSpeed;
+  return cm;
 }
 
+
 int getMedianDistance() {
+  
+  static unsigned long lastSample = 0;
+  unsigned long now = millis();
+  if (now - lastSample < 50) return Distance; // reuse last value if called too soon
+  lastSample = now;
+
   int raw = Distancia_test();         // raw single measurement
   distanceBuffer[bufferIndex] = raw;  // insert into buffer
   bufferIndex = (bufferIndex + 1) % NMedian;
@@ -498,11 +553,11 @@ int getMedianDistance() {
   int median = temp[size / 2];
 
   // Serial debug
-  Serial.print(F("Ultrasonic raw="));
-  Serial.print(raw);
-  Serial.print(F(" cm  |  median="));
-  Serial.print(median);
-  Serial.println(F(" cm"));
+  DBG(F("Ultrasonic raw="));
+  DBG(raw);
+  DBG(F(" cm  |  median="));
+  DBG(median);
+  DBGLN(F(" cm"));
 
   Distance = median;
   return median;
@@ -523,7 +578,7 @@ uint16_t irReceive() {
       } else {
         received = IrReceiver.decodedIRData.command;
         lastIRCommand = received;
-        Serial.println(received, DEC);
+        DBGLN(received, DEC);
       }
     }
     IrReceiver.resume();
@@ -541,25 +596,25 @@ void setMotor(const char* direction, int speed) {
     analogWrite(pinEngineA_1A, safeSpeed);
     analogWrite(pinEngineA_1B, 0);
     MotorDirection = 1;
-    Serial.print(F("Driving Forward >>> Speed="));
-    Serial.println(safeSpeed);
+    DBG(F("Driving Forward >>> Speed="));
+    DBGLN(safeSpeed);
   } else if (strcmp(direction, "backward") == 0) {
     analogWrite(pinEngineA_1A, 0);
     analogWrite(pinEngineA_1B, safeSpeed);
     MotorDirection = 2;
-    Serial.print(F("Driving Backward >> Speed="));
-    Serial.println(safeSpeed);
+    DBG(F("Driving Backward >> Speed="));
+    DBGLN(safeSpeed);
   } else {  // stop
     analogWrite(pinEngineA_1A, 0);
     analogWrite(pinEngineA_1B, 0);
     Speed = 0;
-    Serial.println(F("Motor OFF"));
+    DBGLN(F("Motor OFF"));
   }
 }
 
 void GoForward() {
   if (MotorDirection == 2 && Speed > 0) {
-    Serial.println(F("Ignored: cannot switch to FORWARD while moving"));
+    DBGLN(F("Ignored: cannot switch to FORWARD while moving"));
     return;
   }
   if (MotorDirection == 2 && Speed == 0) {
@@ -574,7 +629,7 @@ void GoForward() {
 
 void GoBackward() {
   if (MotorDirection == 1 && Speed > 0) {
-    Serial.println(F("Ignored: cannot switch to BACKWARD while moving"));
+    DBGLN(F("Ignored: cannot switch to BACKWARD while moving"));
     return;
   }
   if (MotorDirection == 1 && Speed == 0) {
@@ -584,7 +639,7 @@ void GoBackward() {
   MotorDirection = 2;
   if (Speed > 0) {
     setMotor("backward", Speed);
-    Serial.println(F("Driving Backward >>"));
+    DBGLN(F("Driving Backward >>"));
   }
 }
 
@@ -615,7 +670,7 @@ void translateIR() {
 
   // Cancel jog if a different non-repeat key appears
   if (momentaryActive && code != 0 && !lastWasRepeat && code != momentaryButton) {
-    Serial.println(F("Cancelling jog due to new key"));
+    DBGLN(F("Cancelling jog due to new key"));
     Stop();
     SetRGBColor("red");
     momentaryActive = false;
@@ -629,7 +684,7 @@ void translateIR() {
   // No new code; if jogging and repeats stopped → timeout
   if (code == 0) {
     if (momentaryActive && (millis() - momentaryLastSeen > momentaryTimeout)) {
-      Serial.println(F("Jog timeout → STOP"));
+      DBGLN(F("Jog timeout → STOP"));
       Stop();
       SetRGBColor("red");
       momentaryActive = false;
@@ -646,13 +701,13 @@ void translateIR() {
     case buttonCHminus:
       {  // Speed -
         if (momentaryActive) {
-          Serial.println(F("Ignored: CH- during jog"));
+          DBGLN(F("Ignored: CH- during jog"));
           break;
         }
         if (UltrasonicOnOff == 0) {
           decreaseStep();
-          Serial.print(F("Manual Speed Down: "));
-          Serial.println(Speed);
+          DBG(F("Manual Speed Down: "));
+          DBGLN(Speed);
           if (Speed == 0) {
             Stop();
             SetRGBColor("red");
@@ -661,7 +716,7 @@ void translateIR() {
             if (MotorDirection == 2) GoBackward();
           }
         } else {
-          Serial.println(F("Ignored: Auto-speed active"));
+          DBGLN(F("Ignored: Auto-speed active"));
         }
         break;
       }
@@ -671,27 +726,27 @@ void translateIR() {
         if (UltrasonicOnOff == 1) {
           UltrasonicOnOff = 0;
           SetGreenLightValue(0);
-          Serial.println(F("Switched from AUTO to MANUAL mode"));
+          DBGLN(F("Switched from AUTO to MANUAL mode"));
         }
-        Serial.println(F("STOP pressed → Motors stopped"));
+        DBGLN(F("STOP pressed → Motors stopped"));
         SetRGBColor("red");
         MotorDirection = 1;  // default to forward when stopped
         Stop();
         currentStep = 0;
-        Serial.println(F("Manual mode reset: next CH+ will start at step 1 (≈3.5V)"));
+        DBGLN(F("Manual mode reset: next CH+ will start at step 1 (≈3.5V)"));
         break;
       }
 
     case buttonCHplus:
       {  // Speed +
         if (momentaryActive) {
-          Serial.println(F("Ignored: CH+ during jog"));
+          DBGLN(F("Ignored: CH+ during jog"));
           break;
         }
         if (UltrasonicOnOff == 0) {
           increaseStep();
-          Serial.print(F("Manual Speed Up: "));
-          Serial.println(Speed);
+          DBG(F("Manual Speed Up: "));
+          DBGLN(Speed);
           if (MotorDirection == 1) {
             GoForward();
             SetRGBColor("white");
@@ -701,7 +756,7 @@ void translateIR() {
             SetRGBColor("blue");
           }
         } else {
-          Serial.println(F("Ignored: Auto-speed active"));
+          DBGLN(F("Ignored: Auto-speed active"));
         }
         break;
       }
@@ -715,9 +770,9 @@ void translateIR() {
           momentaryActive = true;
           momentaryButton = buttonBackward;
           momentaryLastSeen = millis();
-          Serial.println(F("Momentary BACKWARD running (hold to move)"));
+          DBGLN(F("Momentary BACKWARD running (hold to move)"));
         } else {
-          Serial.println(F("Ignored: << only when stationary & not in AUTO"));
+          DBGLN(F("Ignored: << only when stationary & not in AUTO"));
         }
         break;
       }
@@ -731,9 +786,9 @@ void translateIR() {
           momentaryActive = true;
           momentaryButton = buttonForward;
           momentaryLastSeen = millis();
-          Serial.println(F("Momentary FORWARD running (hold to move)"));
+          DBGLN(F("Momentary FORWARD running (hold to move)"));
         } else {
-          Serial.println(F("Ignored: >> only when stationary & not in AUTO"));
+          DBGLN(F("Ignored: >> only when stationary & not in AUTO"));
         }
         break;
       }
@@ -743,49 +798,69 @@ void translateIR() {
         UltrasonicOnOff = !UltrasonicOnOff;
         digitalWrite(pinLEDGreen, UltrasonicOnOff ? HIGH : LOW);
         if (UltrasonicOnOff) {
-          Serial.println(F("Driving started (auto-speed)"));
+          DBGLN(F("Driving started (auto-speed)"));
           SetRGBColor("white");
           GoForward();
           playPattern(pattern_double);
         } else {
-          Serial.println(F("Driving stopped"));
+          DBGLN(F("Driving stopped"));
           SetRGBColor("red");
           Stop();
           Speed = 0;
           playPattern(pattern_descend);
           currentStep = 0;
-          Serial.println(F("Manual mode rearmed: next step = 1 (≈3.5V)"));
+          DBGLN(F("Manual mode rearmed: next step = 1 (≈3.5V)"));
         }
         break;
       }
 
-    case buttonEQ:
-      {  // Mute / Unmute
-        SoundOnOff = !SoundOnOff;
-        Serial.println(SoundOnOff ? "Sound ON" : "Sound OFF");
-        if (SoundOnOff) playPattern(pattern_double);
-        break;
+    case buttonEQ: {  // Mute / Unmute
+      SoundOnOff = !SoundOnOff;
+      DBGLN(SoundOnOff ? "Sound ON" : "Sound OFF");
+
+      if (!SoundOnOff) {
+        // Hard stop any audio that's playing
+        noTone(pinBuzzer);
+        digitalWrite(pinBuzzer, LOW);
+        for (int j = 0; j < 20; j++) buzzerPattern[j] = 0;
+        buzzerIndex = 0;
+        // DO NOT touch sirenActive or LEDs -> lights continue flashing if sirenActive==true
+      } else {
+        playPattern(pattern_double); // short confirmation chirp
       }
+      break;
+    }
 
     case button100plus:
       {  // Horn
-        Serial.println(F("Horn activated"));
+        DBGLN(F("Horn activated"));
         playPattern(pattern_horn);
         break;
       }
 
+    case button200plus:
+      sirenActive = !sirenActive;
+      if (!sirenActive) {
+        noTone(pinBuzzer);
+        SetRGB1Light(false, false, false);
+        SetRGB2Light(false, false, false);
+      } else {
+        sirenTimer   = millis();      // for LED swap
+        sirenStartMs = sirenTimer;    // for deterministic audio sweep
+        DBGLN(SoundOnOff ? F("Siren ON (with sound)") : F("Siren ON (lights only, muted)"));
+      }
+      break;
+
+  
     case button9:
       {  // Speak battery voltage
         float vIn = getBatteryVoltageDirect();
-        Serial.print("Battery Voltage (pattern): ");
-        Serial.println(vIn, 1);
+        DBG("Battery Voltage (pattern): ");
+        DBGLN(vIn, 1);
         playVoltagePattern(vIn);
         break;
       }
 
-    case button0:
-    case button200plus:
-      break;
   }
 
   // Refresh jog heartbeat if the same jog key is still active
@@ -799,6 +874,7 @@ void translateIR() {
 // Buzzer (non-blocking pattern player)
 // ================================================================================================
 void updateBuzzer() {
+  if (sirenActive) return;     // siren owns the buzzer
   if (buzzerPattern[buzzerIndex] == 0) return;
 
   unsigned long now = millis();
@@ -839,27 +915,30 @@ void playPattern(const int* pattern) {
 }
 
 void playVoltagePattern(float vIn) {
-  if (SoundOnOff != 1) return;
-  digitalWrite(pinBuzzer, LOW);
+  if (SoundOnOff != 1) return;   // respect mute
+  digitalWrite(pinBuzzer, LOW);  // ensure buzzer off first
 
   int volts = (int)floor(vIn);
-  int tenths = ((int)(vIn * 10)) % 10;
+  int tenths = (int)round(vIn * 10) % 10;
 
   int idx = 0;
   // Long beeps for integer volts
   for (int i = 0; i < volts; i++) {
     buzzerPattern[idx++] = 400; // ON
-    buzzerPattern[idx++] = 200; // OFF
+    if (i < volts - 1) {
+      buzzerPattern[idx++] = 200; // OFF only between longs
+    }
   }
 
-  // Separator pause
-  buzzerPattern[idx++] = 0;   // no beep
-  buzzerPattern[idx++] = 600; // 600 ms silence
+  // Separator pause (clear gap before tenths)
+  buzzerPattern[idx++] = 600; // OFF
 
   // Short beeps for tenths
   for (int i = 0; i < tenths; i++) {
     buzzerPattern[idx++] = 150; // ON
-    buzzerPattern[idx++] = 150; // OFF
+    if (i < tenths - 1) {
+      buzzerPattern[idx++] = 150; // OFF only between shorts
+    }
   }
 
   // End marker
@@ -891,7 +970,7 @@ void SetRGBLight(bool R, bool G, bool B, int led) {
   if (led == 0 || led == 2) SetRGB2Light(R, G, B);
 }
 
-void SetRGBColor(const char* colorName, int led) {
+void SetRGBLightColor(const char* colorName, int led) {
   if (strcmp(colorName, "red") == 0) SetRGBLight(true, false, false, led);
   else if (strcmp(colorName, "green") == 0) SetRGBLight(false, true, false, led);
   else if (strcmp(colorName, "blue") == 0) SetRGBLight(false, false, true, led);
@@ -904,7 +983,8 @@ void SetRGBColor(const char* colorName, int led) {
 }
 
 void SetGreenLightValue(int Value) {
-  analogWrite(pinLEDGreen, Value);
+  // analogWrite(pinLEDGreen, Value);
+  digitalWrite(pinLEDGreen, (Value > 0) ? HIGH : LOW); // Any non-zero means ON
 }
 
 void blinkLED(int count, int onDelay, int offDelay) {
@@ -918,4 +998,48 @@ void blinkLED(int count, int onDelay, int offDelay) {
 
 void GreenLEDBlink() {
   blinkLED(2, 100, 50);
+}
+
+// Put near your LED helpers:
+void SetRGBColor(const char* colorName, int led) {
+  if (sirenActive) return;   // ignore LED color changes during siren
+  SetRGBLightColor(colorName, led);
+}
+
+void updateSiren() {
+  if (!sirenActive) return;
+
+  unsigned long now = millis();
+
+  // LED swap every 300 ms (always runs, even when muted)
+  if (now - sirenTimer > 300) {
+    sirenPhase = !sirenPhase;
+    if (sirenPhase) {
+      SetRGB1Light(true,  false, false); // LED1 red
+      SetRGB2Light(false, false, true);  // LED2 blue
+    } else {
+      SetRGB1Light(false, false, true);  // LED1 blue
+      SetRGB2Light(true,  false, false); // LED2 red
+    }
+    sirenTimer = now;
+  }
+
+  // ---- Deterministic triangle sweep for pitch (immune to loop jitter) ----
+  // Total cycle = up + down
+  const unsigned long cycleMs = 2UL * sirenSweepMs;
+  unsigned long t = (now - sirenStartMs) % cycleMs;
+
+  int f;
+  if (t < sirenSweepMs) {
+    // ramp up: Fmin → Fmax
+    f = sirenFmin + (int)((unsigned long)(sirenFmax - sirenFmin) * t / sirenSweepMs);
+  } else {
+    // ramp down: Fmax → Fmin
+    unsigned long td = t - sirenSweepMs;
+    f = sirenFmax - (int)((unsigned long)(sirenFmax - sirenFmin) * td / sirenSweepMs);
+  }
+
+  // Sound part only if not muted
+  if (SoundOnOff == 1) tone(pinBuzzer, f);
+  else                 noTone(pinBuzzer);
 }
