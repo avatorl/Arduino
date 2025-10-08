@@ -7,7 +7,7 @@
 // ================================================================================================
 
 // 💡 Features ====================================================================================
-// 3 speed levels (3.5, 4.5, and 6 volts on the motor)
+// 3 speed levels: effective voltage on the motor: 3.5V, 4.5V, 6.0V; measured voltage (unloaded train) - around 4.4V, 5.0V, 6.0V volts
 // Stop button: stops, red lights
 // Speed up button: speed level +1, moves forward; white lights
 // Speed down button: speed level -1, moves forward until speed level = 0; white lights
@@ -329,6 +329,9 @@ int pwmFromVoltage(float desiredMotorV) {
 //   int raw = analogRead(pinMotorSense);
 //   float vSense = (raw * 5.0) / 1023.0;     // voltage across shunt
 //   return vSense / shuntResistor;           // I = V / R
+//   Serial.print(F("Motor current = "));
+//   Serial.print(iNow, 2);
+//   Serial.println(F(" A"));
 // }
 
 // ================================================================================================
@@ -836,35 +839,34 @@ void playPattern(const int* pattern) {
 }
 
 void playVoltagePattern(float vIn) {
-  if (SoundOnOff != 1) return;   // respect mute
-  digitalWrite(pinBuzzer, LOW);  // ensure buzzer off first
+  if (SoundOnOff != 1) return;
+  digitalWrite(pinBuzzer, LOW);
 
   int volts = (int)floor(vIn);
   int tenths = ((int)(vIn * 10)) % 10;
 
   int idx = 0;
+  // Long beeps for integer volts
   for (int i = 0; i < volts; i++) {
-    buzzerPattern[idx++] = 400;
-    buzzerPattern[idx++] = 200;
-  }
-  if (idx % 2 == 0) {
-    buzzerPattern[idx++] = 1;
-    buzzerPattern[idx++] = 600;
-  } else {
-    buzzerPattern[idx++] = 600;
-  }
-  for (int i = 0; i < tenths; i++) {
-    buzzerPattern[idx++] = 150;
-    buzzerPattern[idx++] = 150;
+    buzzerPattern[idx++] = 400; // ON
+    buzzerPattern[idx++] = 200; // OFF
   }
 
+  // Separator pause
+  buzzerPattern[idx++] = 0;   // no beep
+  buzzerPattern[idx++] = 600; // 600 ms silence
+
+  // Short beeps for tenths
+  for (int i = 0; i < tenths; i++) {
+    buzzerPattern[idx++] = 150; // ON
+    buzzerPattern[idx++] = 150; // OFF
+  }
+
+  // End marker
   buzzerPattern[idx] = 0;
   buzzerIndex = 0;
   buzzerTimer = millis();
-
-  if (buzzerPattern[0] > 0) {
-    digitalWrite(pinBuzzer, HIGH);
-  }
+  if (buzzerPattern[0] > 0) digitalWrite(pinBuzzer, HIGH);
 }
 
 // ================================================================================================
