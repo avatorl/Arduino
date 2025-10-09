@@ -214,6 +214,7 @@ int tiltStableState = HIGH;                 // using INPUT_PULLUP: OPEN=HIGH (id
 int tiltLastRead    = HIGH;
 unsigned long tiltEdgeAt     = 0;
 unsigned long tiltQuietUntil = 0;
+bool tiltStopLatched = false;
 
 // ================================================================================================
 // Setup
@@ -1097,13 +1098,19 @@ void updateTiltSensor() {
     tiltQuietUntil  = now + TILT_QUIET_MS;
 
     if (tiltActive(tiltStableState)) {
-      DBGLN(F("TILT: ACTIVE -> RGB yellow, 0.5s beep"));
-      //SetRGBColor("yellow");          // ignored if sirenActive==true
-      playPattern(pattern_tiltBeep);  // respects SoundOnOff
+      DBGLN(F("TILT: ACTIVE -> emergency stop, yellow + beep"));
+      if (!tiltStopLatched) {
+        Stop();
+        UltrasonicOnOff = 0;         // optional: exit AUTO
+        currentStep = 0;             // optional: reset manual steps
+        tiltStopLatched = true;
+      }
+      SetRGBColor("red");
+      playPattern(pattern_tiltBeep);
     } else {
-      DBGLN(F("TILT: IDLE -> RGB off"));
-      Stop();
-      SetRGBColor("off");
+      DBGLN(F("TILT: IDLE -> clear latch, restore LEDs"));
+      tiltStopLatched = false;
+      SetRGBColor("yellow");
     }
   }
 }
