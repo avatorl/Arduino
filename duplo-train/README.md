@@ -1,4 +1,14 @@
-# Lego Duplo compatible 3D-printed train with Arduino
+# Arduino program for a 3D-printed train
+
+Train compatible with Lego DUPLO (3D-printed parts + Arduino)
+
+Based on: https://cults3d.com/en/3d-model/game/locomotora-sofia-controlada-por-infrarojos-con-control-de-velocidad-por-ultrasonidos-y-motor-superior-multiusos-lego-duplo
+
+Arduino code fully rewritten & extended by Andrzej Leszkiewicz
+
+Get the most recent version of the code at https://github.com/avatorl/Arduino/blob/main/duplo-train/duplo-train.ino
+
+3D-printing profile: https://makerworld.com/en/models/1854728-arduino-train-locomotive-remote-controlled#profileId-1983131
 
 ## Features
 - 3 speed levels: effective voltage on the motor: 3.5V, 4.5V, 6.0V; measured voltage (unloaded train) - around 4.4V, 5.0V, 6.0V volts
