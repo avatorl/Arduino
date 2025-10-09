@@ -207,7 +207,7 @@ const unsigned long sirenSweepMs = 800;       // up in 800 ms, down in 800 ms
 unsigned long sirenStartMs = 0;               // set when siren toggles ON
 
 // ── Tilt sensor debounce config/state ─────────────────────────────────────────
-const bool TILT_ACTIVE_LOW = false; // pulldown -> ACTIVE when pin is HIGH
+const bool TILT_ACTIVE_LOW = true; //
 const unsigned long TILT_STABLE_MS = 120;   // must hold this long to confirm state
 const unsigned long TILT_QUIET_MS  = 120;   // ignore flips for a short time after change
 int tiltStableState = HIGH;                 // using INPUT_PULLUP: OPEN=HIGH (idle)
