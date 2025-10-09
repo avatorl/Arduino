@@ -21,8 +21,8 @@
 // Battery status button: indicates battery level by sound beeps, e.g. 7 long beeps and 3 short beeps = 7.3V
 // Battery status detection: warning level with red lights and sound; shutdown level
 // Sleep mode: powers down automatically after 5 minutes without IR remote input (can be woken up again with the remote)
+// Tilt sensor: ???
 // TBD: motor overcurrent protection (shunt resistor)
-// TBD v.2: tilt sensor
 
 // ================================================================================================
 // Electronic components
@@ -32,6 +32,7 @@
 //   2 x RGB LED , 1 x green LED
 //   DC motor with 1:48 gear, motor driver HG7881 L9110S
 //   Ultrasonic distance sensor HC-SR04
+//   Tilt sensor SW-520D
 //
 // Resistors:
 //   LED RGB R: 100 Ω + 47 Ω, G: 100 Ω, B: 100 Ω
@@ -39,7 +40,7 @@
 //   Voltage divider: 10K Ω and 4.7K Ω
 // ===============================================================================================
 
-#define DEBUG 0
+#define DEBUG 1
 #if DEBUG
   #define DBG(...)   Serial.print(__VA_ARGS__)
   #define DBGLN(...) Serial.println(__VA_ARGS__)
@@ -102,6 +103,7 @@ const int button9 = 74;  // Battery Test
 // Arduino Pin Mapping
 // ================================================================================================
 const int pinBatterySense = A0;                          // Battery voltage monitoring
+const int pinTiltSensor = A2;                            // Tilt sensor
 const int pinUltrasonicTrig = A3;                        // Ultrasonic sensor trigger
 const int pinUltrasonicEcho = A4;                        // Ultrasonic sensor echo
 const int pinIRReceiver = 2;                             // IR receiver input: D2 or D3 required to wake from sleep
@@ -120,6 +122,7 @@ const int pattern_batteryWarn[] = { 3000, 100, 0 };
 const int pattern_double[] = { 150, 100, 150, 0 };
 const int pattern_descend[] = { 120, 80, 120, 80, 120, 0 };
 const int pattern_horn[] = { 1000, 100, 0 };
+const int pattern_tiltBeep[] = { 500, 0 };  // single 0.5s beep
 
 // ================================================================================================
 // Other constants
@@ -203,6 +206,15 @@ const int  sirenFmax = 800;
 const unsigned long sirenSweepMs = 800;       // up in 800 ms, down in 800 ms
 unsigned long sirenStartMs = 0;               // set when siren toggles ON
 
+// ── Tilt sensor debounce config/state ─────────────────────────────────────────
+const bool TILT_ACTIVE_LOW = false; // pulldown -> ACTIVE when pin is HIGH
+const unsigned long TILT_STABLE_MS = 120;   // must hold this long to confirm state
+const unsigned long TILT_QUIET_MS  = 120;   // ignore flips for a short time after change
+int tiltStableState = HIGH;                 // using INPUT_PULLUP: OPEN=HIGH (idle)
+int tiltLastRead    = HIGH;
+unsigned long tiltEdgeAt     = 0;
+unsigned long tiltQuietUntil = 0;
+
 // ================================================================================================
 // Setup
 // ================================================================================================
@@ -225,7 +237,9 @@ void setup() {
   pinMode(pinUltrasonicEcho, INPUT);
   pinMode(pinIRReceiver, INPUT);
   pinMode(pinBatterySense, INPUT);
-
+  pinMode(pinTiltSensor, INPUT);
+  digitalWrite(pinTiltSensor, LOW);  // ensure internal pull-up is OFF
+  
   playPattern(pattern_melody);  // Play melody
   SetGreenLightValue(0);
   SetRGBColor(FrontLightOnOff ? "red" : "off");
@@ -233,7 +247,7 @@ void setup() {
   // Measure battery at startup
   batteryVoltage = getBatteryVoltageDirect();
   DBG(F("Battery measured: "));
-  DBGLN(batteryVoltage, 2);
+  DBGLN(batteryVoltage, 2);  
 
   // Configure dynamic speed steps
   configureSpeedSteps();
@@ -271,28 +285,28 @@ void loop() {
 //     overCurrentActive = false; // reset if current goes back to normal
 //   }
 
-  // === 1. Battery monitor first (critical safety) ===
-  float vNow = getBatteryVoltageDirect();
-  if (vNow < BATTERY_LOW_SHUTDOWN) {
+  // // === 1. Battery monitor first (critical safety) ===
+  // float vNow = getBatteryVoltageDirect();
+  // if (vNow < BATTERY_LOW_SHUTDOWN) {
 
-    DBGLN(F("Battery critically low → stopping train"));
+  //   DBGLN(F("Battery critically low → stopping train"));
 
-    Stop();
-    SetRGBColor("off");
-    SetGreenLightValue(0);
-    digitalWrite(pinBuzzer, LOW); // end beep
-    buzzerPattern[0] = 0;
-    buzzerIndex = 0;
-    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
+  //   Stop();
+  //   SetRGBColor("off");
+  //   SetGreenLightValue(0);
+  //   digitalWrite(pinBuzzer, LOW); // end beep
+  //   buzzerPattern[0] = 0;
+  //   buzzerIndex = 0;
+  //   LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
 
-  } else if (vNow < BATTERY_LOW_WARNING) {
-    static unsigned long lastWarn = 0;
-    if (millis() - lastWarn > 60000) {  // warn max once per minute
-      DBGLN(F("Battery low warning"));
-      playPattern(pattern_batteryWarn);
-      lastWarn = millis();
-    }
-  }
+  // } else if (vNow < BATTERY_LOW_WARNING) {
+  //   static unsigned long lastWarn = 0;
+  //   if (millis() - lastWarn > 60000) {  // warn max once per minute
+  //     DBGLN(F("Battery low warning"));
+  //     playPattern(pattern_batteryWarn);
+  //     lastWarn = millis();
+  //   }
+  // }
 
   // === 2. Idle timeout watchdog ===
   if (millis() - lastActive > idleTimeout) {
@@ -311,6 +325,9 @@ void loop() {
   if (UltrasonicOnOff == 1) {
     SpeedAutoUltrasonic();
   }
+  
+  // === 6. Tilt sensor ===
+  updateTiltSensor();
 
   // === 5. IR remote handler ===
   translateIR();
@@ -1052,4 +1069,41 @@ void updateSiren() {
   // Sound part only if not muted
   if (SoundOnOff == 1) tone(pinBuzzer, f);
   else                 noTone(pinBuzzer);
+}
+
+// ================================================================================================
+// Tilt sensor (SW-520D / SW-200D family) – debounced, RGB + 0.5s beep on tilt
+// Uses TILT_ACTIVE_LOW to support either pull-up (active LOW) or pull-down (active HIGH).
+// ================================================================================================
+void updateTiltSensor() {
+  unsigned long now = millis();
+  int reading = digitalRead(pinTiltSensor);
+
+  auto tiltActive = [](int level) -> bool {
+    if (TILT_ACTIVE_LOW) return (level == LOW);
+    else                 return (level == HIGH); // your case: external pulldown
+  };
+
+  if (reading != tiltLastRead) {
+    tiltLastRead = reading;
+    tiltEdgeAt = now;
+  }
+
+  if (now >= tiltQuietUntil &&
+      reading != tiltStableState &&
+      (now - tiltEdgeAt) >= TILT_STABLE_MS) {
+
+    tiltStableState = reading;
+    tiltQuietUntil  = now + TILT_QUIET_MS;
+
+    if (tiltActive(tiltStableState)) {
+      DBGLN(F("TILT: ACTIVE -> RGB yellow, 0.5s beep"));
+      //SetRGBColor("yellow");          // ignored if sirenActive==true
+      playPattern(pattern_tiltBeep);  // respects SoundOnOff
+    } else {
+      DBGLN(F("TILT: IDLE -> RGB off"));
+      Stop();
+      SetRGBColor("off");
+    }
+  }
 }
