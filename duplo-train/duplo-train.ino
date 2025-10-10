@@ -63,13 +63,32 @@
 #include <LowPower.h>     // for sleep mode
 #include <math.h>
 
+#if defined(__AVR__)
+  #include <avr/pgmspace.h>
+#endif
+
 void SetRGBLightColor(const char* colorName, int led = 0);
 void SetRGBColor(const char* colorName, int led = 0);
-// --- Forward declarations for the tone melody player ---
-void playToneSequence(const int* seqFD, int pairCount, bool loopPlayback = false);
+
+void playToneSequenceRaw(const int* seqFD, int pairCount, bool loopPlayback, bool isProgmem = false);
+
+// RAM wrapper (use if your melody is a normal RAM array)
+template <size_t N>
+void playToneSequence(const int16_t (&seqFD)[N], bool loopPlayback = false) {
+  static_assert(N % 2 == 0, "Melody array must have even length [freq,dur,...]");
+  playToneSequenceRaw((const int*)seqFD, (int)(N/2), loopPlayback, false);
+}
+
+// PROGMEM wrapper (for PROGMEM melodies)
+template <size_t N>
+void playToneSequence_P(const int16_t (&seqFD)[N], bool loopPlayback = false) {
+  static_assert(N % 2 == 0, "Melody array must have even length [freq,dur,...]");
+  playToneSequenceRaw((const int*)seqFD, (int)(N/2), loopPlayback, true);
+}
+
+
 void updateMelody();
 void stopMelody();
-
 
 // ================================================================================================
 // Remote Button Codes (NEC protocol, "Car MP3" remote control)
@@ -129,12 +148,91 @@ const int pattern_descend[] = { 120, 80, 120, 80, 120, 0 };
 const int pattern_horn[] = { 1000, 100, 0 };
 const int pattern_tiltBeep[] = { 500, 0 };  // single 0.5s beep
 
+#define PAIRS_OF(a) (int)(sizeof(a) / (2 * sizeof((a)[0])))
+
 // Somewhere global or static (C major snippet)
-const int melodyDemo[] = {
+const int16_t melodyDemo[] PROGMEM = {
   523, 200, 587, 200, 659, 200, 698, 200,  // C D E F (ms each)
   784, 400, 0, 120, 784, 200,              // G (hold), short rest, G
   698, 200, 659, 200, 587, 200, 523, 400   // F E D C
 };
+
+// Common octave references (for readability when editing):
+// C4=262, D4=294, E4=330, F4=349, G4=392, A4=440, B4=494,
+// C5=523, D5=587, E5=659, F5=698, G5=784, A5=880, B5=988
+
+// ───────────────────────────────────────────────────────────────────────────
+// Twinkle Twinkle Little Star (C major, 2 parts, kid tempo)
+const int16_t melodyTwinkle[] PROGMEM = {
+  523,400, 523,400, 392,400, 392,400, 440,400, 440,400, 392,800, 0,120,
+  349,400, 349,400, 330,400, 330,400, 294,400, 294,400, 262,800, 0,200,
+  392,400, 392,400, 349,400, 349,400, 330,400, 330,400, 294,800, 0,120,
+  392,400, 392,400, 349,400, 349,400, 330,400, 330,400, 294,800, 0,200,
+  523,400, 523,400, 392,400, 392,400, 440,400, 440,400, 392,800, 0,120,
+  349,400, 349,400, 330,400, 330,400, 294,400, 294,400, 262,800
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// Ode to Joy (Beethoven) – bright, kid tempo
+const int16_t melodyOdeToJoy[] PROGMEM = {
+  392,300, 392,300, 440,300, 494,300, 494,300, 440,300, 392,300, 349,300,
+  330,300, 330,300, 349,300, 392,450, 392,150, 349,300, 349,300, 330,600, 0,150,
+
+  330,300, 349,300, 392,300, 392,300, 349,300, 330,300, 294,300, 294,300,
+  330,300, 349,450, 349,150, 330,300, 330,300, 392,600, 0,200,
+
+  392,300, 392,300, 440,300, 494,300, 494,300, 440,300, 392,300, 349,300,
+  330,300, 330,300, 349,300, 392,450, 392,150, 349,300, 349,300, 330,600
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// Mary Had a Little Lamb (C major)
+const int16_t melodyMary[] PROGMEM = {
+  330,300, 294,300, 262,300, 294,300, 330,300, 330,300, 330,600, 0,120,
+  294,300, 294,300, 294,600, 0,120, 330,300, 392,300, 392,600, 0,120,
+  330,300, 294,300, 262,300, 294,300, 330,300, 330,300, 330,300, 330,300,
+  294,300, 294,300, 330,300, 294,300, 262,800
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// Wheels on the Bus (G major feel, but using C range for kid-speaker comfort)
+const int16_t melodyWheels[] PROGMEM = {
+  392,400, 392,200, 392,400, 392,200, 392,400, 440,400, 392,400, 349,400, 330,800, 0,120,
+  392,400, 392,200, 392,400, 392,200, 392,400, 440,400, 392,400, 349,400, 330,800, 0,150,
+  330,300, 330,300, 349,300, 392,400, 392,200, 349,400, 349,200, 330,600, 0,120,
+  392,400, 392,200, 392,400, 392,200, 392,400, 440,400, 392,400, 349,400, 330,800
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// If You’re Happy and You Know It (clap-clap spots as rests)
+const int16_t melodyHappy[] PROGMEM = {
+  262,300, 262,300, 392,400, 392,200, 392,300, 392,300, 392,400, 0,200,    // clap
+  392,300, 392,300, 440,400, 440,200, 392,400, 392,200, 349,600, 0,200,    // clap
+  262,300, 262,300, 392,400, 392,200, 392,300, 392,300, 392,400, 0,200,    // clap
+  392,300, 349,300, 330,400, 330,200, 294,400, 294,200, 262,800
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// Baby Shark (hook only, kid tempo, repetitive & fun)
+const int16_t melodyBabyShark[] PROGMEM = {
+  392,200, 392,200, 392,200, 392,200, 392,400, 0,120,
+  392,200, 392,200, 392,200, 392,200, 392,400, 0,120,
+  392,200, 392,200, 392,200, 392,200, 392,400, 0,120,
+  392,200, 392,200, 392,200, 392,200, 392,600, 0,200,
+  // “doo-doo-doo-doo-doo-doo” rise
+  392,200, 440,200, 392,200, 330,200, 392,600, 0,200
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// Jingle Bells (verse hook)
+const int16_t melodyJingle[] PROGMEM = {
+  392,400, 392,400, 392,800, 0,120,
+  392,400, 392,400, 392,800, 0,120,
+  392,400, 494,400, 330,400, 349,400, 392,900, 0,150,
+  440,400, 440,400, 440,600, 440,200, 440,400, 392,400, 392,400, 392,200, 392,200, 392,1200, 0,200,
+  440,400, 440,400, 440,600, 440,200, 440,400, 392,400, 392,400, 440,400, 392,800, 494,800
+};
+
 
 // ================================================================================================
 // Other constants
@@ -266,7 +364,7 @@ void setup() {
   //playPattern(pattern_melody);  // Play melody
   SetGreenLightValue(0);
   SetRGBColor(FrontLightOnOff ? "red" : "off");
-  playToneSequence(melodyDemo, sizeof(melodyDemo)/ (2*sizeof(int)), false); 
+  playToneSequence_P(melodyDemo, false);
 
   // Measure battery at startup
   batteryVoltage = getBatteryVoltageDirect();
@@ -894,13 +992,46 @@ void translateIR() {
       }
       break;
 
-      case button1: {
-        DBGLN(F("Play demo melody"));
-        playToneSequence(melodyDemo, sizeof(melodyDemo)/ (2*sizeof(int)), false); // no loop
-        break;
-      }     
+    case button1: {
+      playToneSequence_P(melodyDemo, false);
+      break;
+    }   
 
-  
+    case button2: {
+      playToneSequence_P(melodyTwinkle, false);
+      break;
+    }  
+
+    case button3: {
+      playToneSequence_P(melodyOdeToJoy, false);
+      break;
+    }
+
+    case button4: {
+      playToneSequence_P(melodyMary, false);
+      break;
+    }   
+
+    case button5: {
+      playToneSequence_P(melodyWheels, false);
+      break;
+    } 
+
+    case button6: {
+      playToneSequence_P(melodyHappy, false);
+      break;
+    }   
+
+    case button7: {
+      playToneSequence_P(melodyBabyShark, false);
+      break;
+    }   
+
+    case button8: {
+      playToneSequence_P(melodyJingle, false);
+      break;
+    }                                                  
+
     case button9:
       {  // Speak battery voltage
         float vIn = getBatteryVoltageDirect();
@@ -1145,7 +1276,6 @@ void updateTiltSensor() {
   }
 }
 
-
 // ================================================================================================
 // Tone melody player (non-blocking)
 //   - Sequence format: flat int array [freq, duration_ms, freq, duration_ms, ...]
@@ -1160,70 +1290,72 @@ void stopMelody() {
   melodyIdxPair = 0;
 }
 
-void playToneSequence(const int* seqFD, int pairCount, bool loopPlayback) {
+void updateMelody() {
+  if (!melodyPlaying) return;
+  if (SoundOnOff != 1 || sirenActive) { stopMelody(); return; }
+
+  unsigned long now = millis();
+
+  if (melodyStepStarted == 0) {
+    int f = melodySeq[melodyIdxPair * 2 + 0];
+    int d = melodySeq[melodyIdxPair * 2 + 1];
+    if (f > 0) tone(pinBuzzer, f); else noTone(pinBuzzer);
+    melodyStepStarted = now;
+    return;
+  }
+
+  int dCur = melodySeq[melodyIdxPair * 2 + 1];
+  if (now - melodyStepStarted >= (unsigned long)dCur) {
+    melodyIdxPair++;
+    if (melodyIdxPair >= melodyLenPairs) {
+      if (melodyLoop) melodyIdxPair = 0;
+      else { stopMelody(); return; }
+    }
+    int f = melodySeq[melodyIdxPair * 2 + 0];
+    int d = melodySeq[melodyIdxPair * 2 + 1];
+    if (f > 0) tone(pinBuzzer, f); else noTone(pinBuzzer);
+    melodyStepStarted = now;
+  }
+}
+
+// Definition (no default arg here)
+void playToneSequenceRaw(const int* seqFD, int pairCount, bool loopPlayback, bool isProgmem) {
   if (pairCount <= 0) return;
-  // Respect mute
   if (SoundOnOff != 1) return;
 
-  // Don’t fight the simple pattern player
+  // stop the simple pattern player so they don't fight
   for (int j = 0; j < 20; j++) buzzerPattern[j] = 0;
   buzzerIndex = 0;
 
-  // Also don’t fight the siren
+  // silence siren if active
   if (sirenActive) {
     sirenActive = false;
     noTone(pinBuzzer);
   }
 
-  // Load sequence (clamp to buffer)
+  // copy sequence into RAM buffer
   melodyLenPairs = (pairCount > MELODY_MAX_PAIRS) ? MELODY_MAX_PAIRS : pairCount;
-  for (int i = 0; i < melodyLenPairs * 2; i++) {
-    melodySeq[i] = seqFD[i];
-  }
-  melodyIdxPair = 0;
-  melodyLoop = loopPlayback;
-  melodyPlaying = true;
-  melodyStepStarted = 0; // force immediate start on first update
-}
 
-void updateMelody() {
-  if (!melodyPlaying) return;
-
-  // Abort if muted or siren took over
-  if (SoundOnOff != 1 || sirenActive) {
-    stopMelody();
-    return;
-  }
-
-  unsigned long now = millis();
-
-  // Kick off first note immediately
-  if (melodyStepStarted == 0) {
-    int f = melodySeq[melodyIdxPair * 2 + 0];
-    int d = melodySeq[melodyIdxPair * 2 + 1];
-    if (f > 0) tone(pinBuzzer, f);
-    else       noTone(pinBuzzer); // rest
-    melodyStepStarted = now;
-    return;
-  }
-
-  // Advance when duration elapsed
-  int dCur = melodySeq[melodyIdxPair * 2 + 1];
-  if (now - melodyStepStarted >= (unsigned long)dCur) {
-    // Next pair
-    melodyIdxPair++;
-    if (melodyIdxPair >= melodyLenPairs) {
-      if (melodyLoop) {
-        melodyIdxPair = 0;
-      } else {
-        stopMelody();
-        return;
-      }
+  if (isProgmem) {
+    // Source is PROGMEM
+  #if defined(__AVR__)
+    // seqFD points to flash; copy into RAM buffer
+    memcpy_P(melodySeq, (const void*)seqFD, (size_t)melodyLenPairs * 2 * sizeof(int16_t));
+  #else
+    // Non-AVR: PROGMEM is regular RAM, plain copy
+    for (int i = 0; i < melodyLenPairs * 2; i++) {
+      melodySeq[i] = seqFD[i];
     }
-    int f = melodySeq[melodyIdxPair * 2 + 0];
-    int d = melodySeq[melodyIdxPair * 2 + 1];
-    if (f > 0) tone(pinBuzzer, f);
-    else       noTone(pinBuzzer);
-    melodyStepStarted = now;
+  #endif
+  } else {
+    // Source is plain RAM
+    for (int i = 0; i < melodyLenPairs * 2; i++) {
+      melodySeq[i] = seqFD[i];
+    }
   }
+
+  melodyIdxPair     = 0;
+  melodyLoop        = loopPlayback;
+  melodyPlaying     = true;
+  melodyStepStarted = 0; // start immediately on next update()
 }
