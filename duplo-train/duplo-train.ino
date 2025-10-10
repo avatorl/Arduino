@@ -41,6 +41,7 @@
 //   Voltage divider: 10K Ω and 4.7K Ω
 // ===============================================================================================
 
+// DEBUG 1 - enables serial output (for testing); DEBUG 0 - disables serial output (for production)
 #define DEBUG 1
 #if DEBUG
   #define DBG(...)   Serial.print(__VA_ARGS__)
@@ -64,6 +65,7 @@
 #include <LowPower.h>     // for sleep mode
 #include <math.h>
 
+// for 
 #if defined(__AVR__)
   #include <avr/pgmspace.h>
 #endif
@@ -73,20 +75,12 @@ void SetRGBColor(const char* colorName, int led = 0);
 
 void playToneSequenceRaw(const int* seqFD, int pairCount, bool loopPlayback, bool isProgmem = false);
 
-// RAM wrapper (use if your melody is a normal RAM array)
-template <size_t N>
-void playToneSequence(const int16_t (&seqFD)[N], bool loopPlayback = false) {
-  static_assert(N % 2 == 0, "Melody array must have even length [freq,dur,...]");
-  playToneSequenceRaw((const int*)seqFD, (int)(N/2), loopPlayback, false);
-}
-
 // PROGMEM wrapper (for PROGMEM melodies)
 template <size_t N>
 void playToneSequence_P(const int16_t (&seqFD)[N], bool loopPlayback = false) {
   static_assert(N % 2 == 0, "Melody array must have even length [freq,dur,...]");
   playToneSequenceRaw((const int*)seqFD, (int)(N/2), loopPlayback, true);
 }
-
 
 void updateMelody();
 void stopMelody();
