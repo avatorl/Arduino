@@ -1,73 +1,41 @@
-// ================================================================================================
-// Train compatible with Lego DUPLO (3D-printed parts + Arduino)
-// Based on: https://cults3d.com/en/3d-model/game/locomotora-sofia-controlada-por-infrarojos-con-control-de-velocidad-por-ultrasonidos-y-motor-superior-multiusos-lego-duplo
-// Arduino code fully rewritten & extended by Andrzej Leszkiewicz
-// Get the most recent version of the code at https://github.com/avatorl/Arduino/blob/main/duplo-train/duplo-train.ino
-// 3D-printing profile: https://makerworld.com/en/models/1854728-arduino-train-locomotive-remote-controlled#profileId-1983131
-// ================================================================================================
+// Library includes
+#include <IRremote.hpp>  // IR sensor library
+#include <LowPower.h>    // Low power/sleep mode library
+#include <math.h>        // Math functions
 
-// 💡 Features ====================================================================================
-// 3 speed levels: effective voltage on the motor: 3.5V, 4.5V, 6.0V; measured voltage (unloaded train) - around 4.4V, 5.0V, 6.0V volts
-// Stop button: stops, red lights
-// Speed up button: speed level +1, moves forward; white lights
-// Speed down button: speed level -1, moves forward until speed level = 0; white lights
-// Move backward button: moves backward at speed level 1 while the button is pressed; blue lights
-// Move forward button: moves forward at speed level 1 while the button is pressed; white lights
-// Auto button: moves forward with obstacle detection enabled. Stops if there is an obstacle.
-//    Moves forward if the obstacle is removed. Speed depends on the distance to the nearest obstacle. White lights and green light.
-// Horn button: horn sound effect
-// Siren button: red and blue lights, siren sounds
-// Music buttons: 8 different melodies
-// Mute button: sound off/on
-// Battery status button: indicates battery level by sound beeps, e.g. 7 long beeps and 3 short beeps = 7.3V
-// Battery status detection: warning level with red lights and sound; shutdown level
-// Sleep mode: powers down automatically after 5 minutes without IR remote input (can be woken up again with the remote)
-// Tilt sensor: stop when the train is on its side
-// TBD: motor overcurrent protection (shunt resistor)
+#include "src/melodies.h"
 
-// ================================================================================================
-// Electronic components
-//   Arduino Nano 3.0 ATMEGA328 CH340
-//   IR sensor HX1838 with wiring adapter
-//   Buzzer
-//   2 x RGB LED , 1 x green LED
-//   DC motor with 1:48 gear, motor driver HG7881 L9110S
-//   Ultrasonic distance sensor HC-SR04
-//   Tilt sensor SW-520D
-//
-// Resistors:
-//   LED RGB R: 100 Ω + 47 Ω, G: 100 Ω, B: 100 Ω
-//   LED Green: 100 Ω + 47 Ω
-//   Voltage divider: 10K Ω and 4.7K Ω
+// ===============================================================================================
+// DEBUG flag: set to 1 to enable serial output for debugging, set to 0 to disable for production
+#define DEBUG 1
+
+// Conditional macros for debug logging
+#if DEBUG
+#define DBG(...) Serial.print(__VA_ARGS__)      // Print without newline
+#define DBGLN(...) Serial.println(__VA_ARGS__)  // Print with newline
+#define DBGBEGIN(...) \
+  do { Serial.begin(__VA_ARGS__); } while (0)  // Initialize Serial
+#else
+#define DBG(...)       // No operation
+#define DBGLN(...)     // No operation
+#define DBGBEGIN(...)  // No operation
+#endif
 // ===============================================================================================
 
-// DEBUG 1 - enables serial output (for testing); DEBUG 0 - disables serial output (for production)
-#define DEBUG 1
-#if DEBUG
-  #define DBG(...)   Serial.print(__VA_ARGS__)
-  #define DBGLN(...) Serial.println(__VA_ARGS__)
-  #define DBGBEGIN(...) do { Serial.begin(__VA_ARGS__); } while(0)
-#else
-  #define DBG(...)
-  #define DBGLN(...)
-  #define DBGBEGIN(...)
-#endif
-
+// Stringify macros
 #ifndef STR_HELPER
-  #define STR_HELPER(x) #x
+#define STR_HELPER(x) #x  // Converts token to string literal
 #endif
 #ifndef STR
-  #define STR(x) STR_HELPER(x)
+#define STR(x) STR_HELPER(x)  // Ensures macro expansion before stringification
 #endif
 
-#define IR_USE_AVR_TIMER1 // move IRremote to Timer1
-#include <IRremote.hpp>   // for IR sensor
-#include <LowPower.h>     // for sleep mode
-#include <math.h>
+// Configure IRremote to use Timer1 on AVR
+#define IR_USE_AVR_TIMER1
 
-// for 
+// AVR-specific include for program memory storage
 #if defined(__AVR__)
-  #include <avr/pgmspace.h>
+#include <avr/pgmspace.h>
 #endif
 
 void SetRGBLightColor(const char* colorName, int led = 0);
@@ -76,14 +44,23 @@ void SetRGBColor(const char* colorName, int led = 0);
 void playToneSequenceRaw(const int* seqFD, int pairCount, bool loopPlayback, bool isProgmem = false);
 
 // PROGMEM wrapper (for PROGMEM melodies)
-template <size_t N>
+template<size_t N>
 void playToneSequence_P(const int16_t (&seqFD)[N], bool loopPlayback = false) {
   static_assert(N % 2 == 0, "Melody array must have even length [freq,dur,...]");
-  playToneSequenceRaw((const int*)seqFD, (int)(N/2), loopPlayback, true);
+  playToneSequenceRaw((const int*)seqFD, (int)(N / 2), loopPlayback, true);
 }
 
 void updateMelody();
 void stopMelody();
+
+// Motor directions
+enum class Dir : uint8_t { Stop = 0,
+                           Forward = 1,
+                           Backward = 2 };
+
+void setMotor(Dir dir, int speed);
+void JogDrive(Dir dir);
+
 
 // ================================================================================================
 // Remote Button Codes (NEC protocol, "Car MP3" remote control)
@@ -106,8 +83,8 @@ const int buttonForward = 64;    // Momentary forward
 const int buttonPlayPause = 67;  // Auto-speed toggle, start/stop
 const int buttonEQ = 9;          // Mute / Unmute
 const int button0 = 22;
-const int button100plus = 25;   // Horn
-const int button200plus = 13;   // Siren
+const int button100plus = 25;  // Horn
+const int button200plus = 13;  // Siren
 const int button1 = 12;
 const int button2 = 24;
 const int button3 = 94;
@@ -145,102 +122,18 @@ const int pattern_tiltBeep[] = { 500, 0 };  // single 0.5s beep
 
 #define PAIRS_OF(a) (int)(sizeof(a) / (2 * sizeof((a)[0])))
 
-// Somewhere global or static (C major snippet)
-const int16_t melodyDemo[] PROGMEM = {
-  523, 200, 587, 200, 659, 200, 698, 200,  // C D E F (ms each)
-  784, 400, 0, 120, 784, 200,              // G (hold), short rest, G
-  698, 200, 659, 200, 587, 200, 523, 400   // F E D C
-};
-
-// Common octave references (for readability when editing):
-// C4=262, D4=294, E4=330, F4=349, G4=392, A4=440, B4=494,
-// C5=523, D5=587, E5=659, F5=698, G5=784, A5=880, B5=988
-
-// ───────────────────────────────────────────────────────────────────────────
-// Twinkle Twinkle Little Star (C major, 2 parts, kid tempo)
-const int16_t melodyTwinkle[] PROGMEM = {
-  523,400, 523,400, 392,400, 392,400, 440,400, 440,400, 392,800, 0,120,
-  349,400, 349,400, 330,400, 330,400, 294,400, 294,400, 262,800, 0,200,
-  392,400, 392,400, 349,400, 349,400, 330,400, 330,400, 294,800, 0,120,
-  392,400, 392,400, 349,400, 349,400, 330,400, 330,400, 294,800, 0,200,
-  523,400, 523,400, 392,400, 392,400, 440,400, 440,400, 392,800, 0,120,
-  349,400, 349,400, 330,400, 330,400, 294,400, 294,400, 262,800
-};
-
-// ───────────────────────────────────────────────────────────────────────────
-// Ode to Joy (Beethoven) – bright, kid tempo
-const int16_t melodyOdeToJoy[] PROGMEM = {
-  392,300, 392,300, 440,300, 494,300, 494,300, 440,300, 392,300, 349,300,
-  330,300, 330,300, 349,300, 392,450, 392,150, 349,300, 349,300, 330,600, 0,150,
-
-  330,300, 349,300, 392,300, 392,300, 349,300, 330,300, 294,300, 294,300,
-  330,300, 349,450, 349,150, 330,300, 330,300, 392,600, 0,200,
-
-  392,300, 392,300, 440,300, 494,300, 494,300, 440,300, 392,300, 349,300,
-  330,300, 330,300, 349,300, 392,450, 392,150, 349,300, 349,300, 330,600
-};
-
-// ───────────────────────────────────────────────────────────────────────────
-// Mary Had a Little Lamb (C major)
-const int16_t melodyMary[] PROGMEM = {
-  330,300, 294,300, 262,300, 294,300, 330,300, 330,300, 330,600, 0,120,
-  294,300, 294,300, 294,600, 0,120, 330,300, 392,300, 392,600, 0,120,
-  330,300, 294,300, 262,300, 294,300, 330,300, 330,300, 330,300, 330,300,
-  294,300, 294,300, 330,300, 294,300, 262,800
-};
-
-// ───────────────────────────────────────────────────────────────────────────
-// Wheels on the Bus (G major feel, but using C range for kid-speaker comfort)
-const int16_t melodyWheels[] PROGMEM = {
-  392,400, 392,200, 392,400, 392,200, 392,400, 440,400, 392,400, 349,400, 330,800, 0,120,
-  392,400, 392,200, 392,400, 392,200, 392,400, 440,400, 392,400, 349,400, 330,800, 0,150,
-  330,300, 330,300, 349,300, 392,400, 392,200, 349,400, 349,200, 330,600, 0,120,
-  392,400, 392,200, 392,400, 392,200, 392,400, 440,400, 392,400, 349,400, 330,800
-};
-
-// ───────────────────────────────────────────────────────────────────────────
-// If You’re Happy and You Know It (clap-clap spots as rests)
-const int16_t melodyHappy[] PROGMEM = {
-  262,300, 262,300, 392,400, 392,200, 392,300, 392,300, 392,400, 0,200,    // clap
-  392,300, 392,300, 440,400, 440,200, 392,400, 392,200, 349,600, 0,200,    // clap
-  262,300, 262,300, 392,400, 392,200, 392,300, 392,300, 392,400, 0,200,    // clap
-  392,300, 349,300, 330,400, 330,200, 294,400, 294,200, 262,800
-};
-
-// ───────────────────────────────────────────────────────────────────────────
-// Baby Shark (hook only, kid tempo, repetitive & fun)
-const int16_t melodyBabyShark[] PROGMEM = {
-  392,200, 392,200, 392,200, 392,200, 392,400, 0,120,
-  392,200, 392,200, 392,200, 392,200, 392,400, 0,120,
-  392,200, 392,200, 392,200, 392,200, 392,400, 0,120,
-  392,200, 392,200, 392,200, 392,200, 392,600, 0,200,
-  // “doo-doo-doo-doo-doo-doo” rise
-  392,200, 440,200, 392,200, 330,200, 392,600, 0,200
-};
-
-// ───────────────────────────────────────────────────────────────────────────
-// Jingle Bells (verse hook)
-const int16_t melodyJingle[] PROGMEM = {
-  392,400, 392,400, 392,800, 0,120,
-  392,400, 392,400, 392,800, 0,120,
-  392,400, 494,400, 330,400, 349,400, 392,900, 0,150,
-  440,400, 440,400, 440,600, 440,200, 440,400, 392,400, 392,400, 392,200, 392,200, 392,1200, 0,200,
-  440,400, 440,400, 440,600, 440,200, 440,400, 392,400, 392,400, 440,400, 392,800, 494,800
-};
-
-
 // ================================================================================================
 // Other constants
 // ================================================================================================
-const unsigned long DIR_DELAY = 1000;  // delay before motor direction change, ms
-const float R1 = 10000.0;              // Top resistor (to battery +)
-const float R2 = 4700.0;               // Bottom resistor (to GND)
-const int AUTO_SAMPLES_FOR_MEDIAN = 5;                 // number of samples for median filter
-const int AUTO_DISTANCE_STOP = 8;            // distance to obstacle <= cm to stop the train
-const int AUTO_DISTANCE_RESTART = 11;          // distance to obstacle >= cm to re-start the train
-const int AUTO_DISTANCE_MAX_SPEED = 50;       // distance to obstacle >= cm to run at max speed
-const float BATTERY_LOW_WARNING = 7.4;      // warn at this voltage
-const float BATTERY_LOW_SHUTDOWN = 7.2;      // force stop at this voltage
+const unsigned long DIR_DELAY = 1000;    // delay before motor direction change, ms
+const float R1 = 10000.0;                // Top resistor (to battery +)
+const float R2 = 4700.0;                 // Bottom resistor (to GND)
+const int AUTO_SAMPLES_FOR_MEDIAN = 5;   // number of samples for median filter
+const int AUTO_DISTANCE_STOP = 8;        // distance to obstacle <= cm to stop the train
+const int AUTO_DISTANCE_RESTART = 11;    // distance to obstacle >= cm to re-start the train
+const int AUTO_DISTANCE_MAX_SPEED = 50;  // distance to obstacle >= cm to run at max speed
+const float BATTERY_LOW_WARNING = 7.4;   // warn at this voltage
+const float BATTERY_LOW_SHUTDOWN = 7.2;  // force stop at this voltage
 const float MAX_SAFE_MOTOR_VOLTAGE = 6.0;
 
 // ================================================================================================
@@ -277,14 +170,15 @@ int pwmSteps[4];  // 0..3
 float voltageSteps[] = { 0.0, 3.5, 4.5, 6.0 };
 float batteryVoltage = 0.0;
 
-// Buzzer player
-int buzzerPattern[20];
+// Buzzer
+#define BUZZER_PATTERN_MAX 20
+int buzzerPattern[BUZZER_PATTERN_MAX];
 int buzzerIndex = 0;
 unsigned long buzzerTimer = 0;
 
 // add near siren globals
 unsigned long sirenStepTimer = 0;
-const uint16_t sirenStepEveryMs = 10;   // change pitch every 10 ms
+const uint16_t sirenStepEveryMs = 10;  // change pitch every 10 ms
 
 // Manual step index
 int currentStep = 0;  // 0=stop, 1=~3.5V, 2=~4.5V, 3=~6V
@@ -301,35 +195,34 @@ int currentStep = 0;  // 0=stop, 1=~3.5V, 2=~4.5V, 3=~6V
 // Siren state
 bool sirenActive = false;
 unsigned long sirenTimer = 0;
-int sirenPhase = 0;     // 0=LED1 red, 1=LED1 blue
+int sirenPhase = 0;  // 0=LED1 red, 1=LED1 blue
 int sirenFreq = 400;
-int sirenDirection = 1; // 1 = up, -1 = down
+int sirenDirection = 1;  // 1 = up, -1 = down
 
 // Siren timing (time-based sweep → stable even with loop jitter)
-const int  sirenFmin = 400;
-const int  sirenFmax = 800;
-const unsigned long sirenSweepMs = 800;       // up in 800 ms, down in 800 ms
-unsigned long sirenStartMs = 0;               // set when siren toggles ON
+const int sirenFmin = 400;
+const int sirenFmax = 800;
+const unsigned long sirenSweepMs = 800;  // up in 800 ms, down in 800 ms
+unsigned long sirenStartMs = 0;          // set when siren toggles ON
 
 // ── Tilt sensor debounce config/state ─────────────────────────────────────────
-const bool TILT_ACTIVE_LOW = true; //
-const unsigned long TILT_STABLE_MS = 500;   // must hold this long to confirm state
-const unsigned long TILT_QUIET_MS  = 500;   // ignore flips for a short time after change
-int tiltStableState = HIGH;                 // using INPUT_PULLUP: OPEN=HIGH (idle)
-int tiltLastRead    = HIGH;
-unsigned long tiltEdgeAt     = 0;
+const bool TILT_ACTIVE_LOW = true;         // tilt at LOW value from sensor
+const unsigned long TILT_STABLE_MS = 500;  // must hold this long to confirm state
+const unsigned long TILT_QUIET_MS = 500;   // ignore flips for a short time after change
+int tiltStableState = HIGH;                // using INPUT_PULLUP: OPEN=HIGH (idle)
+int tiltLastRead = HIGH;
+unsigned long tiltEdgeAt = 0;
 unsigned long tiltQuietUntil = 0;
 bool tiltStopLatched = false;
 
 // ── Tone melody player state ────────────────────────────────────────────────
 const int MELODY_MAX_PAIRS = 64;      // up to 64 (freq,dur) pairs
-int  melodySeq[MELODY_MAX_PAIRS * 2]; // flat [f,d,f,d,...]
-int  melodyLenPairs = 0;              // number of (f,d) pairs loaded
-int  melodyIdxPair  = 0;              // current pair index
-bool melodyLoop     = false;          // loop playback
-bool melodyPlaying  = false;          // active?
+int melodySeq[MELODY_MAX_PAIRS * 2];  // flat [f,d,f,d,...]
+int melodyLenPairs = 0;               // number of (f,d) pairs loaded
+int melodyIdxPair = 0;                // current pair index
+bool melodyLoop = false;              // loop playback
+bool melodyPlaying = false;           // active?
 unsigned long melodyStepStarted = 0;  // ms when current note started
-
 
 // ================================================================================================
 // Setup
@@ -355,7 +248,7 @@ void setup() {
   pinMode(pinBatterySense, INPUT);
   pinMode(pinTiltSensor, INPUT);
   digitalWrite(pinTiltSensor, LOW);  // ensure internal pull-up is OFF
-  
+
   //playPattern(pattern_melody);  // Play melody
   SetGreenLightValue(0);
   SetRGBColor(FrontLightOnOff ? "red" : "off");
@@ -364,7 +257,7 @@ void setup() {
   // Measure battery at startup
   batteryVoltage = getBatteryVoltageDirect();
   DBG(F("Battery measured: "));
-  DBGLN(batteryVoltage, 2);  
+  DBGLN(batteryVoltage, 2);
 
   // Configure dynamic speed steps
   configureSpeedSteps();
@@ -378,29 +271,29 @@ void setup() {
 // ================================================================================================
 void loop() {
 
-// // --- Overcurrent protection with persistence ---
-//   float motorCurrent = getMotorCurrent();
-//   if (motorCurrent > maxSafeCurrent) {
-//     if (!overCurrentActive) {
-//       overCurrentActive = true;
-//       overCurrentStart = millis();
-//     } else {
-//       if (millis() - overCurrentStart > 200) { // >200 ms continuous
-//         DBG(F("⚠️ Motor Overcurrent: "));
-//         DBG(motorCurrent, 2);
-//         DBGLN(F(" A → STOPPING!"));
+  // // --- Overcurrent protection with persistence ---
+  //   float motorCurrent = getMotorCurrent();
+  //   if (motorCurrent > maxSafeCurrent) {
+  //     if (!overCurrentActive) {
+  //       overCurrentActive = true;
+  //       overCurrentStart = millis();
+  //     } else {
+  //       if (millis() - overCurrentStart > 200) { // >200 ms continuous
+  //         DBG(F("⚠️ Motor Overcurrent: "));
+  //         DBG(motorCurrent, 2);
+  //         DBGLN(F(" A → STOPPING!"));
 
-//         Stop();
-//         SetRGBColor("red");
-//         playPattern(pattern_descend); // warning sound
-//         delay(500);
+  //         Stop();
+  //         SetRGBColor("red");
+  //         playPattern(pattern_descend); // warning sound
+  //         delay(500);
 
-//         overCurrentActive = false; // reset
-//       }
-//     }
-//   } else {
-//     overCurrentActive = false; // reset if current goes back to normal
-//   }
+  //         overCurrentActive = false; // reset
+  //       }
+  //     }
+  //   } else {
+  //     overCurrentActive = false; // reset if current goes back to normal
+  //   }
 
   // // === 1. Battery monitor first (critical safety) ===
   // float vNow = getBatteryVoltageDirect();
@@ -442,7 +335,7 @@ void loop() {
   if (UltrasonicOnOff == 1) {
     SpeedAutoUltrasonic();
   }
-  
+
   // === 6. Tilt sensor ===
   updateTiltSensor();
 
@@ -454,8 +347,7 @@ void loop() {
   updateSiren();
   updateMelody();
 
-  delay(10); // small loop delay
-
+  delay(10);  // small loop delay
 }
 
 // ================================================================================================
@@ -636,7 +528,7 @@ void updateMotorSpeed(int targetSpeed) {
   }
 
   if (Speed == 0) Stop();
-  else setMotor("forward", Speed);  // auto always forward
+  else setMotor(Dir::Forward, Speed);  // auto always forward
 }
 
 int Distancia_test() {
@@ -647,7 +539,7 @@ int Distancia_test() {
 
   // Timeout derived from max distance (≈58 µs per cm) with 1.25x margin
   const unsigned long echoTimeoutUs =
-      (unsigned long)(AUTO_DISTANCE_MAX_SPEED * 58UL * 5 / 4);
+    (unsigned long)(AUTO_DISTANCE_MAX_SPEED * 58UL * 5 / 4);
 
   // Read echo with timeout
   unsigned long duration = pulseIn(pinUltrasonicEcho, HIGH, echoTimeoutUs);
@@ -663,10 +555,10 @@ int Distancia_test() {
 
 
 int getMedianDistance() {
-  
+
   static unsigned long lastSample = 0;
   unsigned long now = millis();
-  if (now - lastSample < 50) return Distance; // reuse last value if called too soon
+  if (now - lastSample < 50) return Distance;  // reuse last value if called too soon
   lastSample = now;
 
   int raw = Distancia_test();         // raw single measurement
@@ -727,26 +619,29 @@ uint16_t irReceive() {
 // ================================================================================================
 // Motor Control
 // ================================================================================================
-void setMotor(const char* direction, int speed) {
+void setMotor(Dir dir, int speed) {
   int safeSpeed = constrain(speed, 0, 255);
-
-  if (strcmp(direction, "forward") == 0) {
-    analogWrite(pinEngineA_1A, safeSpeed);
-    analogWrite(pinEngineA_1B, 0);
-    MotorDirection = 1;
-    DBG(F("Driving Forward >>> Speed="));
-    DBGLN(safeSpeed);
-  } else if (strcmp(direction, "backward") == 0) {
-    analogWrite(pinEngineA_1A, 0);
-    analogWrite(pinEngineA_1B, safeSpeed);
-    MotorDirection = 2;
-    DBG(F("Driving Backward >> Speed="));
-    DBGLN(safeSpeed);
-  } else {  // stop
-    analogWrite(pinEngineA_1A, 0);
-    analogWrite(pinEngineA_1B, 0);
-    Speed = 0;
-    DBGLN(F("Motor OFF"));
+  switch (dir) {
+    case Dir::Forward:
+      analogWrite(pinEngineA_1A, safeSpeed);
+      analogWrite(pinEngineA_1B, 0);
+      MotorDirection = 1;
+      DBG(F("Driving Forward >>> Speed="));
+      DBGLN(safeSpeed);
+      break;
+    case Dir::Backward:
+      analogWrite(pinEngineA_1A, 0);
+      analogWrite(pinEngineA_1B, safeSpeed);
+      MotorDirection = 2;
+      DBG(F("Driving Backward >> Speed="));
+      DBGLN(safeSpeed);
+      break;
+    default:  // Stop
+      analogWrite(pinEngineA_1A, 0);
+      analogWrite(pinEngineA_1B, 0);
+      Speed = 0;
+      DBGLN(F("Motor OFF"));
+      break;
   }
 }
 
@@ -761,7 +656,7 @@ void GoForward() {
   }
   MotorDirection = 1;
   if (Speed > 0) {
-    setMotor("forward", Speed);
+    setMotor(Dir::Forward, Speed);
   }
 }
 
@@ -776,22 +671,22 @@ void GoBackward() {
   }
   MotorDirection = 2;
   if (Speed > 0) {
-    setMotor("backward", Speed);
+    setMotor(Dir::Backward, Speed);
     DBGLN(F("Driving Backward >>"));
   }
 }
 
 void Stop() {
-  setMotor("stop", 0);
+  setMotor(Dir::Stop, 0);
 }
 
 // Jog motor (doesn’t affect MotorDirection or Speed state)
-void JogDrive(const char* direction) {
-  int jogPWM = pwmSteps[1]; // speed level 1
-  if (strcmp(direction, "forward") == 0) {
+void JogDrive(Dir dir) {
+  int jogPWM = pwmSteps[1];
+  if (dir == Dir::Forward) {
     analogWrite(pinEngineA_1A, jogPWM);
     analogWrite(pinEngineA_1B, 0);
-  } else if (strcmp(direction, "backward") == 0) {
+  } else if (dir == Dir::Backward) {
     analogWrite(pinEngineA_1A, 0);
     analogWrite(pinEngineA_1B, jogPWM);
   } else {
@@ -902,7 +797,7 @@ void translateIR() {
     case buttonBackward:
       {  // << momentary backward (jog)
         if (UltrasonicOnOff == 0 && Speed == 0) {
-          JogDrive("backward");
+          JogDrive(Dir::Backward);
           SetRGBColor("blue");
           momentaryActive = true;
           momentaryButton = buttonBackward;
@@ -917,7 +812,7 @@ void translateIR() {
     case buttonForward:
       {  // >> momentary forward (jog)
         if (UltrasonicOnOff == 0 && Speed == 0) {
-          JogDrive("forward");
+          JogDrive(Dir::Forward);
           SetRGBColor("white");
           momentaryActive = true;
           momentaryButton = buttonForward;
@@ -950,22 +845,23 @@ void translateIR() {
         break;
       }
 
-    case buttonEQ: {  // Mute / Unmute
-      SoundOnOff = !SoundOnOff;
-      DBGLN(SoundOnOff ? "Sound ON" : "Sound OFF");
+    case buttonEQ:
+      {  // Mute / Unmute
+        SoundOnOff = !SoundOnOff;
+        DBGLN(SoundOnOff ? "Sound ON" : "Sound OFF");
 
-      if (!SoundOnOff) {
-        // Hard stop any audio that's playing
-        noTone(pinBuzzer);
-        digitalWrite(pinBuzzer, LOW);
-        for (int j = 0; j < 20; j++) buzzerPattern[j] = 0;
-        buzzerIndex = 0;
-        // DO NOT touch sirenActive or LEDs -> lights continue flashing if sirenActive==true
-      } else {
-        playPattern(pattern_double); // short confirmation chirp
+        if (!SoundOnOff) {
+          // Hard stop any audio that's playing
+          noTone(pinBuzzer);
+          digitalWrite(pinBuzzer, LOW);
+          for (int j = 0; j < 20; j++) buzzerPattern[j] = 0;
+          buzzerIndex = 0;
+          // DO NOT touch sirenActive or LEDs -> lights continue flashing if sirenActive==true
+        } else {
+          playPattern(pattern_double);  // short confirmation chirp
+        }
+        break;
       }
-      break;
-    }
 
     case button100plus:
       {  // Horn
@@ -978,54 +874,61 @@ void translateIR() {
       sirenActive = !sirenActive;
       if (!sirenActive) {
         noTone(pinBuzzer);
-        SetRGB1Light(false, false, false);
-        SetRGB2Light(false, false, false);
+        SetRGBColor("off");
       } else {
-        sirenTimer   = millis();      // for LED swap
-        sirenStartMs = sirenTimer;    // for deterministic audio sweep
+        sirenTimer = millis();      // for LED swap
+        sirenStartMs = sirenTimer;  // for deterministic audio sweep
         DBGLN(SoundOnOff ? F("Siren ON (with sound)") : F("Siren ON (lights only, muted)"));
       }
       break;
 
-    case button1: {
-      playToneSequence_P(melodyDemo, false);
-      break;
-    }   
+    case button1:
+      {
+        playToneSequence_P(melodyDemo, false);
+        break;
+      }
 
-    case button2: {
-      playToneSequence_P(melodyTwinkle, false);
-      break;
-    }  
+    case button2:
+      {
+        playToneSequence_P(melodyTwinkle, false);
+        break;
+      }
 
-    case button3: {
-      playToneSequence_P(melodyOdeToJoy, false);
-      break;
-    }
+    case button3:
+      {
+        playToneSequence_P(melodyOdeToJoy, false);
+        break;
+      }
 
-    case button4: {
-      playToneSequence_P(melodyMary, false);
-      break;
-    }   
+    case button4:
+      {
+        playToneSequence_P(melodyMary, false);
+        break;
+      }
 
-    case button5: {
-      playToneSequence_P(melodyWheels, false);
-      break;
-    } 
+    case button5:
+      {
+        playToneSequence_P(melodyWheels, false);
+        break;
+      }
 
-    case button6: {
-      playToneSequence_P(melodyHappy, false);
-      break;
-    }   
+    case button6:
+      {
+        playToneSequence_P(melodyHappy, false);
+        break;
+      }
 
-    case button7: {
-      playToneSequence_P(melodyBabyShark, false);
-      break;
-    }   
+    case button7:
+      {
+        playToneSequence_P(melodyBabyShark, false);
+        break;
+      }
 
-    case button8: {
-      playToneSequence_P(melodyJingle, false);
-      break;
-    }                                                  
+    case button8:
+      {
+        playToneSequence_P(melodyJingle, false);
+        break;
+      }
 
     case button9:
       {  // Speak battery voltage
@@ -1035,7 +938,6 @@ void translateIR() {
         playVoltagePattern(vIn);
         break;
       }
-
   }
 
   // Refresh jog heartbeat if the same jog key is still active
@@ -1048,23 +950,24 @@ void translateIR() {
 // ================================================================================================
 // Buzzer (non-blocking pattern player)
 // ================================================================================================
-void updateBuzzer() {
-  if (sirenActive) return;     // siren owns the buzzer
-  if (buzzerPattern[buzzerIndex] == 0) return;
+inline void clearBuzzerPattern() {
+  for (int j = 0; j < BUZZER_PATTERN_MAX; ++j) buzzerPattern[j] = 0;
+  buzzerIndex = 0;
+}
 
+void updateBuzzer() {
+  if (sirenActive) return;
+  if (buzzerPattern[buzzerIndex] == 0) return;
   unsigned long now = millis();
   if (now - buzzerTimer >= (unsigned long)buzzerPattern[buzzerIndex]) {
-    buzzerIndex++;
+    ++buzzerIndex;
     buzzerTimer = now;
-
     if (buzzerPattern[buzzerIndex] == 0) {
       digitalWrite(pinBuzzer, LOW);
-      buzzerIndex = 0;
-      buzzerPattern[0] = 0;
+      clearBuzzerPattern();
       return;
     }
-
-    if (buzzerIndex % 2 == 0) digitalWrite(pinBuzzer, HIGH);
+    if ((buzzerIndex & 1) == 0) digitalWrite(pinBuzzer, HIGH);
     else digitalWrite(pinBuzzer, LOW);
   }
 }
@@ -1074,20 +977,17 @@ void updateBuzzer() {
 // ------------------------------------------------------------------------------------------------
 void playPattern(const int* pattern) {
   if (SoundOnOff != 1) return;
-
-  digitalWrite(pinBuzzer, LOW);  // ensure buzzer off first
-
-  for (int j = 0; j < 10; j++) buzzerPattern[j] = 0;
+  digitalWrite(pinBuzzer, LOW);
+  clearBuzzerPattern();
 
   int i = 0;
-  while (i < 9) {
-    buzzerPattern[i] = pattern[i];
-    if (pattern[i] == 0) break;
-    i++;
+  for (; i < BUZZER_PATTERN_MAX - 1; ++i) {
+    int v = pattern[i];
+    buzzerPattern[i] = v;
+    if (v == 0) break;
   }
   buzzerPattern[i] = 0;
 
-  buzzerIndex = 0;
   buzzerTimer = millis();
   if (buzzerPattern[0] > 0) digitalWrite(pinBuzzer, HIGH);
 }
@@ -1098,35 +998,25 @@ void playPattern(const int* pattern) {
 //     - short beeps for tenths
 // ------------------------------------------------------------------------------------------------
 void playVoltagePattern(float vIn) {
-  if (SoundOnOff != 1) return;   // respect mute
-  digitalWrite(pinBuzzer, LOW);  // ensure buzzer off first
+  if (SoundOnOff != 1) return;
+  digitalWrite(pinBuzzer, LOW);
+  clearBuzzerPattern();
 
   int volts = (int)floor(vIn);
   int tenths = (int)round(vIn * 10) % 10;
 
+  int cap = BUZZER_PATTERN_MAX - 1;
   int idx = 0;
-  // Long beeps for integer volts
-  for (int i = 0; i < volts; i++) {
-    buzzerPattern[idx++] = 400; // ON
-    if (i < volts - 1) {
-      buzzerPattern[idx++] = 200; // OFF only between longs
-    }
+  for (int i = 0; i < volts && idx < cap; ++i) {                 // long beeps
+    if (idx < cap) buzzerPattern[idx++] = 400;                   // ON
+    if (i < volts - 1 && idx < cap) buzzerPattern[idx++] = 200;  // OFF between longs
   }
-
-  // Separator pause (clear gap before tenths)
-  buzzerPattern[idx++] = 600; // OFF
-
-  // Short beeps for tenths
-  for (int i = 0; i < tenths; i++) {
-    buzzerPattern[idx++] = 150; // ON
-    if (i < tenths - 1) {
-      buzzerPattern[idx++] = 150; // OFF only between shorts
-    }
+  if (idx < cap && volts > 0) buzzerPattern[idx++] = 600;         // separator OFF
+  for (int i = 0; i < tenths && idx < cap; ++i) {                 // short beeps
+    if (idx < cap) buzzerPattern[idx++] = 150;                    // ON
+    if (i < tenths - 1 && idx < cap) buzzerPattern[idx++] = 150;  // OFF between shorts
   }
-
-  // End marker
   buzzerPattern[idx] = 0;
-  buzzerIndex = 0;
   buzzerTimer = millis();
   if (buzzerPattern[0] > 0) digitalWrite(pinBuzzer, HIGH);
 }
@@ -1135,40 +1025,50 @@ void playVoltagePattern(float vIn) {
 // LEDs
 // ================================================================================================
 
-void SetRGB1Light(bool R, bool G, bool B) {
-  if (FrontLightOnOff == 0) return;
-  digitalWrite(pinLED1_R, R ? LOW : HIGH);
-  digitalWrite(pinLED1_G, G ? LOW : HIGH);
-  digitalWrite(pinLED1_B, B ? LOW : HIGH);
-}
-
-void SetRGB2Light(bool R, bool G, bool B) {
-  if (FrontLightOnOff == 0) return;
-  digitalWrite(pinLED2_R, R ? LOW : HIGH);
-  digitalWrite(pinLED2_G, G ? LOW : HIGH);
-  digitalWrite(pinLED2_B, B ? LOW : HIGH);
+inline void writeRGBPins(int rPin, int gPin, int bPin, bool R, bool G, bool B) {
+  digitalWrite(rPin, R ? LOW : HIGH);
+  digitalWrite(gPin, G ? LOW : HIGH);
+  digitalWrite(bPin, B ? LOW : HIGH);
 }
 
 void SetRGBLight(bool R, bool G, bool B, int led) {
-  if (led == 0 || led == 1) SetRGB1Light(R, G, B);
-  if (led == 0 || led == 2) SetRGB2Light(R, G, B);
+  if (FrontLightOnOff == 0) return;
+  if (led == 0 || led == 1) writeRGBPins(pinLED1_R, pinLED1_G, pinLED1_B, R, G, B);
+  if (led == 0 || led == 2) writeRGBPins(pinLED2_R, pinLED2_G, pinLED2_B, R, G, B);
 }
 
+struct Color {
+  const char* name;
+  bool r, g, b;
+};
+
+// Simple RAM LUT (no PROGMEM name pointers)
+static const Color COLORS[] = {
+  { "red", 1, 0, 0 }, { "green", 0, 1, 0 }, { "blue", 0, 0, 1 }, { "yellow", 1, 1, 0 }, { "cyan", 0, 1, 1 }, { "magenta", 1, 0, 1 }, { "white", 1, 1, 1 }, { "off", 0, 0, 0 }
+};
+
 void SetRGBLightColor(const char* colorName, int led) {
-  if (strcmp(colorName, "red") == 0) SetRGBLight(true, false, false, led);
-  else if (strcmp(colorName, "green") == 0) SetRGBLight(false, true, false, led);
-  else if (strcmp(colorName, "blue") == 0) SetRGBLight(false, false, true, led);
-  else if (strcmp(colorName, "yellow") == 0) SetRGBLight(true, true, false, led);
-  else if (strcmp(colorName, "cyan") == 0) SetRGBLight(false, true, true, led);
-  else if (strcmp(colorName, "magenta") == 0) SetRGBLight(true, false, true, led);
-  else if (strcmp(colorName, "white") == 0) SetRGBLight(true, true, true, led);
-  else if (strcmp(colorName, "off") == 0) SetRGBLight(false, false, false, led);
-  else SetRGBLight(false, false, false, led);
+  // lookup by full name only (no single-letter aliases)
+  bool R = false, G = false, B = false;
+  for (uint8_t i = 0; i < sizeof(COLORS) / sizeof(COLORS[0]); ++i) {
+    if (strcmp(colorName, COLORS[i].name) == 0) {
+      R = COLORS[i].r;
+      G = COLORS[i].g;
+      B = COLORS[i].b;
+      break;
+    }
+  }
+  SetRGBLight(R, G, B, led);
+}
+
+inline void SetRGBColor(const char* colorName, int led) {
+  if (sirenActive) return;  // ignore during siren
+  SetRGBLightColor(colorName, led);
 }
 
 void SetGreenLightValue(int Value) {
   // analogWrite(pinLEDGreen, Value);
-  digitalWrite(pinLEDGreen, (Value > 0) ? HIGH : LOW); // Any non-zero means ON
+  digitalWrite(pinLEDGreen, (Value > 0) ? HIGH : LOW);  // Any non-zero means ON
 }
 
 void blinkLED(int count, int onDelay, int offDelay) {
@@ -1184,12 +1084,6 @@ void GreenLEDBlink() {
   blinkLED(2, 100, 50);
 }
 
-// Put near your LED helpers:
-void SetRGBColor(const char* colorName, int led) {
-  if (sirenActive) return;   // ignore LED color changes during siren
-  SetRGBLightColor(colorName, led);
-}
-
 void updateSiren() {
   if (!sirenActive) return;
 
@@ -1199,18 +1093,17 @@ void updateSiren() {
   if (now - sirenTimer > 300) {
     sirenPhase = !sirenPhase;
     if (sirenPhase) {
-      SetRGB1Light(true,  false, false); // LED1 red
-      SetRGB2Light(false, false, true);  // LED2 blue
+      SetRGBLight(true, false, false, 1);  // LED1 red
+      SetRGBLight(false, false, true, 2);  // LED2 blue
     } else {
-      SetRGB1Light(false, false, true);  // LED1 blue
-      SetRGB2Light(true,  false, false); // LED2 red
+      SetRGBLight(false, false, true, 1);  // LED1 blue
+      SetRGBLight(true, false, false, 2);  // LED2 red
     }
     sirenTimer = now;
   }
 
   // ---- Deterministic triangle sweep for pitch (immune to loop jitter) ----
-  // Total cycle = up + down
-  const unsigned long cycleMs = 2UL * sirenSweepMs;
+  const unsigned long cycleMs = 2UL * sirenSweepMs;  // Total cycle = up + down
   unsigned long t = (now - sirenStartMs) % cycleMs;
 
   int f;
@@ -1225,12 +1118,13 @@ void updateSiren() {
 
   // Sound part only if not muted
   if (SoundOnOff == 1) tone(pinBuzzer, f);
-  else                 noTone(pinBuzzer);
+  else noTone(pinBuzzer);
 }
 
 // ================================================================================================
 // Tilt sensor (SW-520D / SW-200D family) – debounced, RGB + 0.5s beep on tilt
 // Uses TILT_ACTIVE_LOW to support either pull-up (active LOW) or pull-down (active HIGH).
+// Note: tilt doesn't disable the siren
 // ================================================================================================
 void updateTiltSensor() {
   unsigned long now = millis();
@@ -1238,7 +1132,7 @@ void updateTiltSensor() {
 
   auto tiltActive = [](int level) -> bool {
     if (TILT_ACTIVE_LOW) return (level == LOW);
-    else                 return (level == HIGH); // your case: external pulldown
+    else return (level == HIGH);
   };
 
   if (reading != tiltLastRead) {
@@ -1246,23 +1140,22 @@ void updateTiltSensor() {
     tiltEdgeAt = now;
   }
 
-  if (now >= tiltQuietUntil &&
-      reading != tiltStableState &&
-      (now - tiltEdgeAt) >= TILT_STABLE_MS) {
+  if (now >= tiltQuietUntil && reading != tiltStableState && (now - tiltEdgeAt) >= TILT_STABLE_MS) {
 
     tiltStableState = reading;
-    tiltQuietUntil  = now + TILT_QUIET_MS;
+    tiltQuietUntil = now + TILT_QUIET_MS;
 
     if (tiltActive(tiltStableState)) {
       DBGLN(F("TILT: ACTIVE -> emergency stop"));
       if (!tiltStopLatched) {
         Stop();
-        UltrasonicOnOff = 0;         // optional: exit AUTO
-        currentStep = 0;             // optional: reset manual steps
+        UltrasonicOnOff = 0;  // optional: exit AUTO
+        currentStep = 0;      // optional: reset manual steps
         tiltStopLatched = true;
       }
       SetRGBColor("red");
       playPattern(pattern_tiltBeep);
+      noTone(pinBuzzer);  // stop siren/music
     } else {
       DBGLN(F("TILT: IDLE -> clear latch, restore LEDs"));
       tiltStopLatched = false;
@@ -1275,82 +1168,106 @@ void updateTiltSensor() {
 // Tone melody player (non-blocking)
 //   - Sequence format: flat int array [freq, duration_ms, freq, duration_ms, ...]
 //   - freq = 0 -> rest (silence) for 'duration_ms'
-//   - Call updateMelody() each loop.
-//   - Respects SoundOnOff; aborts if sirenActive is set.
+//   - Call updateMelody() in the main loop to handle playback timing.
+//   - Respects SoundOnOff flag (must be 1 to play).
+//   - Automatically stops if sirenActive is true.
+//   - Supports looping playback.
+//   - Use playToneSequenceRaw(...) to start a new melody.
+//   - Use stopMelody() to stop playback manually.
 // ================================================================================================
+
+// Stops melody playback and resets related state
 void stopMelody() {
   noTone(pinBuzzer);
   melodyPlaying = false;
   melodyLenPairs = 0;
   melodyIdxPair = 0;
+  melodyStepStarted = 0;
 }
 
+// Updates the melody playback based on timing and current step
 void updateMelody() {
-  if (!melodyPlaying) return;
-  if (SoundOnOff != 1 || sirenActive) { stopMelody(); return; }
+  if (!melodyPlaying) return;  // Exit if no melody is playing
+  if (SoundOnOff != 1 || sirenActive) {
+    stopMelody();
+    return;
+  }  // Stop if sound is muted or siren is active
 
   unsigned long now = millis();
 
+  // Start the first note
   if (melodyStepStarted == 0) {
-    int f = melodySeq[melodyIdxPair * 2 + 0];
-    int d = melodySeq[melodyIdxPair * 2 + 1];
-    if (f > 0) tone(pinBuzzer, f); else noTone(pinBuzzer);
+    int f = melodySeq[melodyIdxPair * 2];      // Frequency
+    int d = melodySeq[melodyIdxPair * 2 + 1];  // Duration
+    if (f > 0) tone(pinBuzzer, f);
+    else noTone(pinBuzzer);
     melodyStepStarted = now;
     return;
   }
 
+  // Continue checking if the current note's duration has elapsed
   int dCur = melodySeq[melodyIdxPair * 2 + 1];
   if (now - melodyStepStarted >= (unsigned long)dCur) {
-    melodyIdxPair++;
+    melodyIdxPair++;  // Move to the next note
     if (melodyIdxPair >= melodyLenPairs) {
-      if (melodyLoop) melodyIdxPair = 0;
-      else { stopMelody(); return; }
+      if (melodyLoop) melodyIdxPair = 0;  // Loop back if enabled
+      else {
+        stopMelody();
+        return;
+      }  // Stop if done
     }
-    int f = melodySeq[melodyIdxPair * 2 + 0];
+    int f = melodySeq[melodyIdxPair * 2];
     int d = melodySeq[melodyIdxPair * 2 + 1];
-    if (f > 0) tone(pinBuzzer, f); else noTone(pinBuzzer);
+    if (f > 0) tone(pinBuzzer, f);
+    else noTone(pinBuzzer);
     melodyStepStarted = now;
   }
 }
 
-// Definition (no default arg here)
+// Starts playback of a tone sequence from RAM or PROGMEM
+// seqFD: pointer to frequency-duration pairs
+// pairCount: number of (frequency, duration) pairs
+// loopPlayback: whether to loop the melody
+// isProgmem: true if seqFD is stored in PROGMEM (flash), false if in RAM
 void playToneSequenceRaw(const int* seqFD, int pairCount, bool loopPlayback, bool isProgmem) {
   if (pairCount <= 0) return;
   if (SoundOnOff != 1) return;
 
-  // stop the simple pattern player so they don't fight
+  // Stop any ongoing buzzer pattern (non-melody)
   for (int j = 0; j < 20; j++) buzzerPattern[j] = 0;
   buzzerIndex = 0;
 
-  // silence siren if active
+  // Stop the siren if active
   if (sirenActive) {
     sirenActive = false;
     noTone(pinBuzzer);
   }
 
-  // copy sequence into RAM buffer
+  // Limit the number of pairs to prevent overflow
   melodyLenPairs = (pairCount > MELODY_MAX_PAIRS) ? MELODY_MAX_PAIRS : pairCount;
 
+  // Copy melody data into RAM buffer
   if (isProgmem) {
-    // Source is PROGMEM
-  #if defined(__AVR__)
-    // seqFD points to flash; copy into RAM buffer
+    // If sequence is in PROGMEM
+#if defined(__AVR__)
+    // AVR platform: use memcpy_P to copy from flash
     memcpy_P(melodySeq, (const void*)seqFD, (size_t)melodyLenPairs * 2 * sizeof(int16_t));
-  #else
-    // Non-AVR: PROGMEM is regular RAM, plain copy
+#else
+    // Non-AVR platform: treat PROGMEM as regular RAM
     for (int i = 0; i < melodyLenPairs * 2; i++) {
       melodySeq[i] = seqFD[i];
     }
-  #endif
+#endif
   } else {
-    // Source is plain RAM
+    // Sequence is already in RAM
     for (int i = 0; i < melodyLenPairs * 2; i++) {
       melodySeq[i] = seqFD[i];
     }
   }
 
-  melodyIdxPair     = 0;
-  melodyLoop        = loopPlayback;
-  melodyPlaying     = true;
-  melodyStepStarted = 0; // start immediately on next update()
+  // Initialize playback state
+  melodyIdxPair = 0;
+  melodyLoop = loopPlayback;
+  melodyPlaying = true;
+  melodyStepStarted = 0;  // Triggers first note on next update
 }
