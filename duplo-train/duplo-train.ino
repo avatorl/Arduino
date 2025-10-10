@@ -17,6 +17,7 @@
 //    Moves forward if the obstacle is removed. Speed depends on the distance to the nearest obstacle. White lights and green light.
 // Horn button: horn sound effect
 // Siren button: red and blue lights, siren sounds
+// Music buttons: 8 different melodies
 // Mute button: sound off/on
 // Battery status button: indicates battery level by sound beeps, e.g. 7 long beeps and 3 short beeps = 7.3V
 // Battery status detection: warning level with red lights and sound; shutdown level
