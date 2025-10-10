@@ -21,14 +21,14 @@
 // Battery status button: indicates battery level by sound beeps, e.g. 7 long beeps and 3 short beeps = 7.3V
 // Battery status detection: warning level with red lights and sound; shutdown level
 // Sleep mode: powers down automatically after 5 minutes without IR remote input (can be woken up again with the remote)
-// Tilt sensor: ???
+// Tilt sensor: stop when the train is on its side
 // TBD: motor overcurrent protection (shunt resistor)
 
 // ================================================================================================
 // Electronic components
 //   Arduino Nano 3.0 ATMEGA328 CH340
 //   IR sensor HX1838 with wiring adapter
-//   Active buzzer
+//   Buzzer
 //   2 x RGB LED , 1 x green LED
 //   DC motor with 1:48 gear, motor driver HG7881 L9110S
 //   Ultrasonic distance sensor HC-SR04
@@ -65,6 +65,11 @@
 
 void SetRGBLightColor(const char* colorName, int led = 0);
 void SetRGBColor(const char* colorName, int led = 0);
+// --- Forward declarations for the tone melody player ---
+void playToneSequence(const int* seqFD, int pairCount, bool loopPlayback = false);
+void updateMelody();
+void stopMelody();
+
 
 // ================================================================================================
 // Remote Button Codes (NEC protocol, "Car MP3" remote control)
@@ -123,6 +128,13 @@ const int pattern_double[] = { 150, 100, 150, 0 };
 const int pattern_descend[] = { 120, 80, 120, 80, 120, 0 };
 const int pattern_horn[] = { 1000, 100, 0 };
 const int pattern_tiltBeep[] = { 500, 0 };  // single 0.5s beep
+
+// Somewhere global or static (C major snippet)
+const int melodyDemo[] = {
+  523, 200, 587, 200, 659, 200, 698, 200,  // C D E F (ms each)
+  784, 400, 0, 120, 784, 200,              // G (hold), short rest, G
+  698, 200, 659, 200, 587, 200, 523, 400   // F E D C
+};
 
 // ================================================================================================
 // Other constants
@@ -208,13 +220,23 @@ unsigned long sirenStartMs = 0;               // set when siren toggles ON
 
 // ── Tilt sensor debounce config/state ─────────────────────────────────────────
 const bool TILT_ACTIVE_LOW = true; //
-const unsigned long TILT_STABLE_MS = 120;   // must hold this long to confirm state
-const unsigned long TILT_QUIET_MS  = 120;   // ignore flips for a short time after change
+const unsigned long TILT_STABLE_MS = 500;   // must hold this long to confirm state
+const unsigned long TILT_QUIET_MS  = 500;   // ignore flips for a short time after change
 int tiltStableState = HIGH;                 // using INPUT_PULLUP: OPEN=HIGH (idle)
 int tiltLastRead    = HIGH;
 unsigned long tiltEdgeAt     = 0;
 unsigned long tiltQuietUntil = 0;
 bool tiltStopLatched = false;
+
+// ── Tone melody player state ────────────────────────────────────────────────
+const int MELODY_MAX_PAIRS = 64;      // up to 64 (freq,dur) pairs
+int  melodySeq[MELODY_MAX_PAIRS * 2]; // flat [f,d,f,d,...]
+int  melodyLenPairs = 0;              // number of (f,d) pairs loaded
+int  melodyIdxPair  = 0;              // current pair index
+bool melodyLoop     = false;          // loop playback
+bool melodyPlaying  = false;          // active?
+unsigned long melodyStepStarted = 0;  // ms when current note started
+
 
 // ================================================================================================
 // Setup
@@ -241,9 +263,10 @@ void setup() {
   pinMode(pinTiltSensor, INPUT);
   digitalWrite(pinTiltSensor, LOW);  // ensure internal pull-up is OFF
   
-  playPattern(pattern_melody);  // Play melody
+  //playPattern(pattern_melody);  // Play melody
   SetGreenLightValue(0);
   SetRGBColor(FrontLightOnOff ? "red" : "off");
+  playToneSequence(melodyDemo, sizeof(melodyDemo)/ (2*sizeof(int)), false); 
 
   // Measure battery at startup
   batteryVoltage = getBatteryVoltageDirect();
@@ -336,6 +359,7 @@ void loop() {
   // Non-blocking playback ===
   updateBuzzer();
   updateSiren();
+  updateMelody();
 
   delay(10); // small loop delay
 
@@ -870,6 +894,12 @@ void translateIR() {
       }
       break;
 
+      case button1: {
+        DBGLN(F("Play demo melody"));
+        playToneSequence(melodyDemo, sizeof(melodyDemo)/ (2*sizeof(int)), false); // no loop
+        break;
+      }     
+
   
     case button9:
       {  // Speak battery voltage
@@ -1098,7 +1128,7 @@ void updateTiltSensor() {
     tiltQuietUntil  = now + TILT_QUIET_MS;
 
     if (tiltActive(tiltStableState)) {
-      DBGLN(F("TILT: ACTIVE -> emergency stop, yellow + beep"));
+      DBGLN(F("TILT: ACTIVE -> emergency stop"));
       if (!tiltStopLatched) {
         Stop();
         UltrasonicOnOff = 0;         // optional: exit AUTO
@@ -1112,5 +1142,88 @@ void updateTiltSensor() {
       tiltStopLatched = false;
       SetRGBColor("yellow");
     }
+  }
+}
+
+
+// ================================================================================================
+// Tone melody player (non-blocking)
+//   - Sequence format: flat int array [freq, duration_ms, freq, duration_ms, ...]
+//   - freq = 0 -> rest (silence) for 'duration_ms'
+//   - Call updateMelody() each loop.
+//   - Respects SoundOnOff; aborts if sirenActive is set.
+// ================================================================================================
+void stopMelody() {
+  noTone(pinBuzzer);
+  melodyPlaying = false;
+  melodyLenPairs = 0;
+  melodyIdxPair = 0;
+}
+
+void playToneSequence(const int* seqFD, int pairCount, bool loopPlayback) {
+  if (pairCount <= 0) return;
+  // Respect mute
+  if (SoundOnOff != 1) return;
+
+  // Don’t fight the simple pattern player
+  for (int j = 0; j < 20; j++) buzzerPattern[j] = 0;
+  buzzerIndex = 0;
+
+  // Also don’t fight the siren
+  if (sirenActive) {
+    sirenActive = false;
+    noTone(pinBuzzer);
+  }
+
+  // Load sequence (clamp to buffer)
+  melodyLenPairs = (pairCount > MELODY_MAX_PAIRS) ? MELODY_MAX_PAIRS : pairCount;
+  for (int i = 0; i < melodyLenPairs * 2; i++) {
+    melodySeq[i] = seqFD[i];
+  }
+  melodyIdxPair = 0;
+  melodyLoop = loopPlayback;
+  melodyPlaying = true;
+  melodyStepStarted = 0; // force immediate start on first update
+}
+
+void updateMelody() {
+  if (!melodyPlaying) return;
+
+  // Abort if muted or siren took over
+  if (SoundOnOff != 1 || sirenActive) {
+    stopMelody();
+    return;
+  }
+
+  unsigned long now = millis();
+
+  // Kick off first note immediately
+  if (melodyStepStarted == 0) {
+    int f = melodySeq[melodyIdxPair * 2 + 0];
+    int d = melodySeq[melodyIdxPair * 2 + 1];
+    if (f > 0) tone(pinBuzzer, f);
+    else       noTone(pinBuzzer); // rest
+    melodyStepStarted = now;
+    return;
+  }
+
+  // Advance when duration elapsed
+  int dCur = melodySeq[melodyIdxPair * 2 + 1];
+  if (now - melodyStepStarted >= (unsigned long)dCur) {
+    // Next pair
+    melodyIdxPair++;
+    if (melodyIdxPair >= melodyLenPairs) {
+      if (melodyLoop) {
+        melodyIdxPair = 0;
+      } else {
+        stopMelody();
+        return;
+      }
+    }
+    int f = melodySeq[melodyIdxPair * 2 + 0];
+    int d = melodySeq[melodyIdxPair * 2 + 1];
+    if (f > 0) tone(pinBuzzer, f);
+    else       noTone(pinBuzzer);
+    melodyStepStarted = now;
   }
 }
