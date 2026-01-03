@@ -1,6 +1,8 @@
-  // Library includes
   #define IR_USE_AVR_TIMER1 // Configure IRremote to use Timer1 on AVR
-  #include <IRremote.hpp>  // IR sensor library
+  // Warning: when IRremote is configured to use Timer1, don’t use PWM (analogWrite) on Timer1 pins (D9, D10)
+  
+  // Library includes
+  #include <IRremote.hpp>  // IR remote library
   #include <LowPower.h>    // Low power/sleep mode library
   #include <math.h>        // Math functions
 
@@ -8,7 +10,7 @@
 
   // ===============================================================================================
   // DEBUG flag: set to 1 to enable serial output for debugging, set to 0 to disable for production
-  #define DEBUG 1
+  #define DEBUG 0
 
   // Conditional macros for debug logging
   #if DEBUG
@@ -72,7 +74,7 @@
   //   8 | 4       28 | 5       90 | 6
   //  66 | 7       82 | 8       74 | 9
 
-  // Button assignments
+  // IR remote button assignments
   const int buttonCHminus = 69;    // Speed -
   const int buttonCH = 70;         // Stop
   const int buttonCHplus = 71;     // Speed +
