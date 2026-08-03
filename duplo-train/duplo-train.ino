@@ -109,6 +109,15 @@
   const int pinLED2_R = 7, pinLED2_G = 8, pinLED2_B = 9;   // RGB LED #2 (ON/OFF only, no PWM required)
   const int pinLEDGreen = 10;                              // Green LED (no PWM required)
   const int pinBuzzer = 12;                                // Active buzzer (with generator)
+// Warning: don’t use PWM (analogWrite) on Timer1 pins (D9, D10)
+
+// TODO in the future version: add color sensor
+// D0, D1: physically free, but used by USB serial and sketch upload
+// D13: appears free, but ENABLE_LED_FEEDBACK makes IRremote use the built-in LED on D13
+// A6, A7: analog input only on most Nano boards
+// Move ultrasonic echo from A4 to A1, use A4/A5 for I²C.
+// Disable IR LED feedback to free D13
+// Move the tilt sensor to A6/A7 and read it with analogRead(), freeing A2 ???
 
   // ================================================================================================
   // Buzzer sound patterns
