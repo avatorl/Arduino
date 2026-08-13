@@ -1,5 +1,3 @@
-#include <avr/pgmspace.h> // Library needed to read directly from Flash Memory
-
 const int ANALOG_PIN = A0;
 const float REF_VOLTAGE = 1.1; 
 const float R1 = 100000.0; 
@@ -8,12 +6,10 @@ const float CALIBRATION = 1.01; // = voltage measured by multimeter / voltage me
 
 const int NUM_SAMPLES = 10; 
 
-// 1. Store the Look-Up Table directly into Flash Memory (SRAM usage = 0 bytes!)
-// To save space, we match 10 voltage boundaries with their matching percentages
-// Lookup table: 7.0V is now hardlocked to 0% capacity (Arduino needs 7+V to work we treat 7V as 0%)
-// Lookup table: Even 10% steps mapping down to 7.0V
-const float voltTable[] PROGMEM = {8.40, 8.20, 8.05, 7.90, 7.75, 7.60, 7.45, 7.35, 7.25, 7.15, 7.00};
-const int pctTable[]   PROGMEM = {100,  90,   80,   70,   60,   50,   40,   30,   20,   10,   0};
+// Lookup table: 7.0V is hardlocked to 0% capacity (Arduino needs 7+V to work, so 7V is treated as 0%)
+// Even 10% steps mapping down to 7.0V.
+const float voltTable[] = {8.40, 8.20, 8.05, 7.90, 7.75, 7.60, 7.45, 7.35, 7.25, 7.15, 7.00};
+const int pctTable[] = {100,  90,   80,   70,   60,   50,   40,   30,   20,   10,   0};
 
 void setup() {
   Serial.begin(9600);
@@ -52,29 +48,26 @@ void loop() {
   Serial.print("V | Dispersion: ±");
   Serial.print(stdDev, 2); 
   Serial.print(" V | 2s 18650 battery: ");         
-  Serial.print(get2SPercentFlash(mean));   // Updated to read from Flash Memory     
+  Serial.print(get2SPercent(mean));   
   Serial.println("%");                     
 
   delay(3000); 
 }
 
-// 2. Modified helper function that extracts data straight from Flash Memory
-int get2SPercentFlash(float voltage) {
-  // Read first and last index directly from Flash Memory
-  float maxVolt = pgm_read_float(&voltTable[0]);
-  float minVolt = pgm_read_float(&voltTable[9]);
+int get2SPercent(float voltage) {
+  float maxVolt = voltTable[0];
+  float minVolt = voltTable[9];
 
   if (voltage >= maxVolt) return 100;
   if (voltage <= minVolt) return 0;
 
-  // Loop through the flash arrays to find where the current voltage sits
   for (int i = 0; i < 9; i++) {
-    float vUpper = pgm_read_float(&voltTable[i]);
-    float vLower = pgm_read_float(&voltTable[i + 1]);
+    float vUpper = voltTable[i];
+    float vLower = voltTable[i + 1];
 
     if (voltage > vLower) {
-      int pUpper = pgm_read_word(&pctTable[i]);
-      int pLower = pgm_read_word(&pctTable[i + 1]);
+      int pUpper = pctTable[i];
+      int pLower = pctTable[i + 1];
       return mapFloat(voltage, vLower, vUpper, pLower, pUpper);
     }
   }
