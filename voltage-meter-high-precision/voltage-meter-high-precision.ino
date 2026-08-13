@@ -6,7 +6,9 @@ const float CALIBRATION = 1.01; // = voltage measured by multimeter / voltage me
 
 const int NUM_SAMPLES = 8; 
 
-// Lookup table: 7.0V is hardlocked to 0% capacity (Arduino needs 7+V to work, so 7V is treated as 0%)
+// Lookup table for 2s 18650 battery pack
+// 7.0V is hardlocked to 0% capacity because Arduino is powered from the battery pack
+//    and Arduino Nano needs at least 7V to work, so 7V is treated as 0%
 // Even 10% steps mapping down to 7.0V.
 const float voltTable[] = {8.40, 8.20, 8.05, 7.90, 7.75, 7.60, 7.45, 7.35, 7.25, 7.15, 7.00};
 const int pctTable[] = {100,  90,   80,   70,   60,   50,   40,   30,   20,   10,   0};
@@ -21,15 +23,17 @@ void loop() {
   float sum = 0.0;
   float ratio = (R1 + R2) / R2;
 
-  // 1. Prime the ADC with one throwaway read, then collect 8 samples
+  // 1. Prime the ADC with one throwaway read, then collect <NUM_SAMPLES> samples
   analogRead(ANALOG_PIN);
 
   for (int i = 0; i < NUM_SAMPLES; i++) {
+    unsigned long sampleStartMillis = millis();
     int rawValue = analogRead(ANALOG_PIN);
     float pinVoltage = ((float)rawValue * REF_VOLTAGE) / 1023.0;
     samples[i] = pinVoltage * ratio * CALIBRATION;
     sum += samples[i];
-    delay(1); 
+    while (millis() - sampleStartMillis < 1) {
+    }
   }
 
   // 2. Calculate the Average (Mean)
