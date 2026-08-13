@@ -4,7 +4,7 @@ const float R1 = 100000.0;
 const float R2 = 10000.0;  
 const float CALIBRATION = 1.01; // = voltage measured by multimeter / voltage measured by Arduino
 
-const int NUM_SAMPLES = 10; 
+const int NUM_SAMPLES = 8; 
 
 // Lookup table: 7.0V is hardlocked to 0% capacity (Arduino needs 7+V to work, so 7V is treated as 0%)
 // Even 10% steps mapping down to 7.0V.
@@ -21,7 +21,9 @@ void loop() {
   float sum = 0.0;
   float ratio = (R1 + R2) / R2;
 
-  // 1. Collect 100 samples rapidly
+  // 1. Prime the ADC with one throwaway read, then collect 8 samples
+  analogRead(ANALOG_PIN);
+
   for (int i = 0; i < NUM_SAMPLES; i++) {
     int rawValue = analogRead(ANALOG_PIN);
     float pinVoltage = ((float)rawValue * REF_VOLTAGE) / 1023.0;
