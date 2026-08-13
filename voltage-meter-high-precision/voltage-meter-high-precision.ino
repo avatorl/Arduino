@@ -57,7 +57,9 @@ void loop() {
   Serial.print(get2SPercent(mean));   
   Serial.println("%");                     
 
-  delay(3000); 
+  unsigned long cooldownStartMillis = millis();
+  while (millis() - cooldownStartMillis < 3000) {
+  }
 }
 
 int get2SPercent(float voltage) {
