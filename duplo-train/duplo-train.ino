@@ -10,7 +10,7 @@
 
   // ===============================================================================================
   // DEBUG flag: set to 1 to enable serial output for debugging, set to 0 to disable for production
-  #define DEBUG 0
+  #define DEBUG 1
 
   // Conditional macros for debug logging
   #if DEBUG
