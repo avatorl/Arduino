@@ -24,6 +24,8 @@ Move tilt state-change messages to `DEBUG_TILT_SENSOR`.
 
 Move startup battery measurement, periodic ADC readings, low-battery guard messages, and the battery-status command output to `DEBUG_VOLTAGE_METER`.
 
+Move idle and sleep state messages to `DEBUG_IR_REMOTE`.
+
 No train-control behavior, timing, safety interlocks, or existing serial output for unrelated debug modules changes.
 
 ## Validation
