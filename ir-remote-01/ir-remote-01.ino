@@ -48,19 +48,31 @@ const int button8 = 82;          // 8 : (wolne)
 const int button9 = 74;          // 9 : (wolne)
 
 // IR sensor pin
-const byte pinIRReceiver = 0;  // (Pin "D0" używany do odbiornika podczerwieni)
+const byte pinIRReceiver = 3;  // (Pin "D0" używany do odbiornika podczerwieni)
 
 // get button code from IR Receiver
 uint16_t irReceive() {
   uint16_t received{ 0 };
 
-  if (IrReceiver.decode()) {
+  if (!IrReceiver.decode()) {
+    return received;
+  }
+
+  if (IrReceiver.decodedIRData.protocol == UNKNOWN) {
+    Serial.println("IR receiver detected a frame, but it was unknown/noisy.");
+    IrReceiver.printIRResultRawFormatted(&Serial, true);
+  } else {
+    Serial.println("IR receiver detected a valid frame:");
+    IrReceiver.printIRResultShort(&Serial);
+
     if (IrReceiver.decodedIRData.protocol == NEC) {
       received = IrReceiver.decodedIRData.command;
+      Serial.print("IR code: ");
       Serial.println(received, DEC);
     }
-    IrReceiver.resume();
   }
+
+  IrReceiver.resume();
   return received;
 }
 
@@ -83,6 +95,7 @@ const byte blue = 1;
 
 void setup() {
   Serial.begin(9600);
+  Serial.println("IR receiver test ready. Press any remote button.");
 
   // initialize LED pins
   pinMode(red, OUTPUT);
@@ -95,10 +108,12 @@ void setup() {
   digitalWrite(blue, LOW);
 
   // initialize IR Receiver
-  IrReceiver.begin(pinIRReceiver);
+  IrReceiver.begin(pinIRReceiver, ENABLE_LED_FEEDBACK);  // Start IR Receiver
 }
 
 void loop() {
+
+   //Serial.print("LOOP");
 
   switch (irReceive()) {
 
