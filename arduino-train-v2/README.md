@@ -25,17 +25,17 @@ Arduino code fully rewritten from scratch and significantly extended by Andrzej 
 ### Core electronics
 
 - Arduino Nano 3.0 compatible board, ATmega328P
-- DRV8833 motor driver module or board
-- IR receiver module compatible with the HX1838 / TSOP4838 family
+- TSOP4838 IR receiver diode
+- DRV8833 motor driver module
+- DC geared motor, around 3 V to 6 V, 1:48 ratio
 - 21-button IR remote, commonly sold as a "Car MP3" remote
 - Passive buzzer
 - 2 common-anode RGB LEDs
 - 1 green LED
 - 2 red LEDs
-- DC geared motor, around 3 V to 6 V, 1:48 ratio
 - 2 x 18650 Li-ion cells
-- 2S battery protection board (BMS)
-- 2S charging board / charger module
+- 2S battery protection module (BMS)
+- 2S USB charger module
 - Buck converter module to step down to 5 V
 - Main power switch
 - Fuse
@@ -48,9 +48,9 @@ Arduino code fully rewritten from scratch and significantly extended by Andrzej 
 
 ### LED control parts
 
-- MCP23008 I2C GPIO expander (module with MOSFETs, or do custom wiring with NPN transistors or logic-level MOSFETs)
-- 7 x NPN transistor switches or logic-level MOSFETs for LED channels
-- LED resistors and small-signal resistors for the chosen LED driver stage
+- MCP23008 I2C GPIO expander (module with MOSFETs)
+- alternative: do custom wiring with bare MCP23008 and NPN transistors or logic-level MOSFETs (e.g. 8 x MOSFETs for LED channels)
+- resistors for LEDs
 
 ### Build materials
 
@@ -75,11 +75,13 @@ You can build a simpler version if you do not need every feature.
 - The LEDs provide headlights and status colors.
 - The `VL53L0X`, `TCS34725`, and `MCP23008` share the I2C bus.
 
-## Before you start
+## SAFETY WARNING: Before you start
 
-- Make sure you are comfortable working with Li-ion cells and a 2S battery pack.
-- Confirm that your motor, motor driver, and battery wiring are correct before powering the train.
-- If you are mixing parts from different sellers, double-check pinouts on every module.
+- Make sure you are comfortable working with Li-ion cells and a DIY battery pack. This is a potentially dangerous part of the project. The power source of the train uses two 18650 Li-ion cells in series (up to 8.4V), BMS, USB charger, and buck converter that must be properly wired together. Wrong wiring can cause fire or explosion or damage Arduino and other electronics. Use DIY battery pack only if you are confident in your skills and have tested the pack for safety. If you are not sure, get help from someone experienced or do not attempt it.
+
+- The train contains small parts and electronics. Such toys usually aren't recommended for kids under 3 years. But check your local safety regulations and age recommendations and use your own parent's mind when deciding if it is appropriate for your child.
+
+- Author just provides the information for educational purposes for adults willing to learn Arduino and electronics. Author doesn't take responsibility for any damage or injury caused to you or your kids even if you strictly followed the instructions.
 
 ## Project status
 
