@@ -1,6 +1,9 @@
   // Warning: when IRremote is configured to use Timer1, don’t use PWM (analogWrite) on Timer1 pins (D9, D10)
+  #ifndef ENABLE_EEPROM_LOGGING
+  #define ENABLE_EEPROM_LOGGING 1
+  #endif
   
-  // Library includes
+  // Library includes. Do not include full libraries for all sensors to avoid unnecessary flash and SRAM usage. Use Wire.h for I2C and implement only the register-level access needed for each sensor.
   #include <Wire.h>         // I2C bus
   #include <IRremote.hpp>  // IR remote library
   #include <LowPower.h>    // Low power/sleep mode library
@@ -129,17 +132,44 @@
   //   TrainDistanceSensorVL53L0X        - VL53L0X distance sensor helper.
   //   Dir                               - Motor direction state.
 
+  // ===============================================================================================
+  // Per-module debug flags. Enable only the categories you want to compile in.
+  // Setting a flag to 1 enables debug serial monitor output for that module, which increases flash and SRAM usage.
+  // Enable for debugging only; disable for production to save memory. Enable only the flags you currently need for debugging. Enabling all debug flags together may exceed the available flash and SRAM on the Arduino Nano. 
+  // All debug flags off: flash 23622 bytes, SRAM 1178 bytes. Memory usage data may get out of date if you change the code, so check the compiler output for the latest numbers.
+  #define DEBUG_COLOR_SENSOR 0      // +2292/25914 bytes, +195/1373 SRAM
+  #define DEBUG_DISTANCE_SENSOR 0   // +1928/25550 bytes, +189/1367 SRAM
+  #define DEBUG_IR_REMOTE 0         // +1994/25616 bytes, +525/1703 SRAM
+  #define DEBUG_TILT_SENSOR 0       // +1096/24718 bytes, +177/1355 SRAM
+  #define DEBUG_VOLTAGE_METER 0     // +2178/25800 bytes, +197/1375 SRAM
+  #define DEBUG_MOTOR 0             // +2862/26484 bytes, +189/1367 SRAM
+  #define DEBUG_LEDS 0              // +3190/26812 bytes, +195/1373 SRAM
+  #define DEBUG_SOUND 0             // +1142/24764 bytes, +177/1355 SRAM
+  #define DEBUG_REMOTE 0            // +1568/25190 bytes, +177/1355 SRAM
+  #ifndef ENABLE_EEPROM_LOGGING
+  #define ENABLE_EEPROM_LOGGING 1   // Defined above before EEPROM.h is conditionally included.
+  #endif
+
+  #define DEBUG_ANY (DEBUG_COLOR_SENSOR || DEBUG_DISTANCE_SENSOR || DEBUG_IR_REMOTE || DEBUG_TILT_SENSOR || DEBUG_VOLTAGE_METER || DEBUG_MOTOR || DEBUG_LEDS || DEBUG_SOUND || DEBUG_REMOTE)
+
   #if ENABLE_EEPROM_LOGGING
   // ===============================================================================================
-  // EEPROM boot log layout  (83 bytes total, Nano has 1024)
+  // EEPROM event layout. The original boot/fault ring remains intact, and a second ring stores
+  // low-battery warning/shutdown events with battery voltage and uptime.
   // ===============================================================================================
-  // 0x00..0x01  boot counter    uint16_t (2 bytes), wraps 0..65535; serves as the per-boot sequence/timestamp
-  // 0x02        log head        uint8_t, next-write slot index (0..EEPROM_BOOT_LOG_SIZE-1)
-  // 0x03..0x52  ring buffer     16 entries × 5 bytes each:
+  // 0x00..0x01  boot counter      uint16_t (2 bytes), wraps 0..65535; serves as the per-boot sequence
+  // 0x02        boot log head     uint8_t, next-write slot index (0..EEPROM_BOOT_LOG_SIZE-1)
+  // 0x03..0x52  boot ring buffer  16 entries × 5 bytes each:
   //               bytes 0..1  boot_seq      — uint16_t (2 bytes) copy of counter at time of this boot
   //               byte 2      flags         — sensor error bitmask (0x00 = all OK)
   //               byte 3      battery       — pack voltage × 10 as uint8_t (e.g. 74 = 7.4 V); 0xFF = not measured
   //               byte 4      fault_count   — DRV8833 runtime fault count for this boot session (0..16)
+  // 0x53        event log head    uint8_t, next-write slot index (0..EEPROM_EVENT_LOG_SIZE-1)
+  // 0x54..0xD3  event ring buffer 16 entries × 8 bytes each:
+  //               bytes 0..1  boot_seq      — uint16_t (2 bytes)
+  //               byte 2      event_type    — 0x01 warning, 0x02 shutdown
+  //               byte 3      battery       — pack voltage × 10 as uint8_t; 0xFF = not measured
+  //               bytes 4..7  uptime_ms     — uint32_t milliseconds since setup()
   //
   // Error flag bit map:
   //   Bit 0  0x01  MCP23008 LED expander not detected
@@ -150,30 +180,17 @@
   const uint8_t  EEPROM_ADDR_LOG_BASE   = 0x03;
   const uint8_t  EEPROM_BOOT_LOG_SIZE   = 16;   // 16 entries × 5 bytes = 80 bytes for the ring buffer
   const uint8_t  EEPROM_ENTRY_SIZE      = 5;    // 5 bytes per entry
+  const uint8_t  EEPROM_ADDR_EVENT_HEAD = 0x53;
+  const uint8_t  EEPROM_ADDR_EVENT_BASE = 0x54;
+  const uint8_t  EEPROM_EVENT_LOG_SIZE  = 16;
+  const uint8_t  EEPROM_EVENT_ENTRY_SIZE = 8;
   const uint8_t  MAX_FAULTS_PER_BOOT    = 16;   // Cap fault increments / EEPROM rewrites per power-on cycle
   const uint8_t  ERR_LED_EXPANDER = 0x01;
   const uint8_t  ERR_COLOR_SENSOR = 0x02;
   const uint8_t  ERR_DISTANCE_TOF = 0x04;
+  const uint8_t  EEPROM_EVENT_WARNING  = 0x01;
+  const uint8_t  EEPROM_EVENT_SHUTDOWN = 0x02;
   #endif
-
-  // ===============================================================================================
-  // Per-module debug flags. Set a flag to 1 to compile only that subsystem's
-  // logs. The legacy DEBUG flag is still supported as a fallback that enables
-  // every module when set to 1.
-  #define DEBUG 0
-  #define DEBUG_COLOR_SENSOR DEBUG
-  #define DEBUG_DISTANCE_SENSOR DEBUG
-  #define DEBUG_IR_REMOTE DEBUG
-  #define DEBUG_TILT_SENSOR DEBUG
-  #define DEBUG_VOLTAGE_METER DEBUG
-  #define DEBUG_MOTOR DEBUG
-  #define DEBUG_LEDS DEBUG
-  #define DEBUG_SOUND DEBUG
-  #define DEBUG_REMOTE DEBUG
-
-  #define ENABLE_EEPROM_LOGGING 0
-
-  #define DEBUG_ANY (DEBUG || DEBUG_COLOR_SENSOR || DEBUG_DISTANCE_SENSOR || DEBUG_IR_REMOTE || DEBUG_TILT_SENSOR || DEBUG_VOLTAGE_METER || DEBUG_MOTOR || DEBUG_LEDS || DEBUG_SOUND || DEBUG_REMOTE)
 
   #if DEBUG_ANY
   #define DBGBEGIN(...) \
@@ -182,7 +199,7 @@
   #define DBGBEGIN(...)  // No operation
   #endif
 
-  #if DEBUG || DEBUG_COLOR_SENSOR
+  #if DEBUG_COLOR_SENSOR
   #define DBG_COLOR_SENSOR(...) Serial.print(__VA_ARGS__)
   #define DBGLN_COLOR_SENSOR(...) Serial.println(__VA_ARGS__)
   #else
@@ -190,7 +207,7 @@
   #define DBGLN_COLOR_SENSOR(...)
   #endif
 
-  #if DEBUG || DEBUG_DISTANCE_SENSOR
+  #if DEBUG_DISTANCE_SENSOR
   #define DBG_DISTANCE_SENSOR(...) Serial.print(__VA_ARGS__)
   #define DBGLN_DISTANCE_SENSOR(...) Serial.println(__VA_ARGS__)
   #else
@@ -198,7 +215,7 @@
   #define DBGLN_DISTANCE_SENSOR(...)
   #endif
 
-  #if DEBUG || DEBUG_IR_REMOTE
+  #if DEBUG_IR_REMOTE
   #define DBG_IR_REMOTE(...) Serial.print(__VA_ARGS__)
   #define DBGLN_IR_REMOTE(...) Serial.println(__VA_ARGS__)
   #else
@@ -206,7 +223,7 @@
   #define DBGLN_IR_REMOTE(...)
   #endif
 
-  #if DEBUG || DEBUG_TILT_SENSOR
+  #if DEBUG_TILT_SENSOR
   #define DBG_TILT_SENSOR(...) Serial.print(__VA_ARGS__)
   #define DBGLN_TILT_SENSOR(...) Serial.println(__VA_ARGS__)
   #else
@@ -214,7 +231,7 @@
   #define DBGLN_TILT_SENSOR(...)
   #endif
 
-  #if DEBUG || DEBUG_VOLTAGE_METER
+  #if DEBUG_VOLTAGE_METER
   #define DBG_VOLTAGE_METER(...) Serial.print(__VA_ARGS__)
   #define DBGLN_VOLTAGE_METER(...) Serial.println(__VA_ARGS__)
   #else
@@ -222,7 +239,7 @@
   #define DBGLN_VOLTAGE_METER(...)
   #endif
 
-  #if DEBUG || DEBUG_MOTOR
+  #if DEBUG_MOTOR
   #define DBG_MOTOR(...) Serial.print(__VA_ARGS__)
   #define DBGLN_MOTOR(...) Serial.println(__VA_ARGS__)
   #else
@@ -230,7 +247,7 @@
   #define DBGLN_MOTOR(...)
   #endif
 
-  #if DEBUG || DEBUG_LEDS
+  #if DEBUG_LEDS
   #define DBG_LEDS(...) Serial.print(__VA_ARGS__)
   #define DBGLN_LEDS(...) Serial.println(__VA_ARGS__)
   #else
@@ -238,7 +255,7 @@
   #define DBGLN_LEDS(...)
   #endif
 
-  #if DEBUG || DEBUG_SOUND
+  #if DEBUG_SOUND
   #define DBG_SOUND(...) Serial.print(__VA_ARGS__)
   #define DBGLN_SOUND(...) Serial.println(__VA_ARGS__)
   #else
@@ -246,13 +263,14 @@
   #define DBGLN_SOUND(...)
   #endif
 
-  #if DEBUG || DEBUG_REMOTE
+  #if DEBUG_REMOTE
   #define DBG_REMOTE(...) Serial.print(__VA_ARGS__)
   #define DBGLN_REMOTE(...) Serial.println(__VA_ARGS__)
   #else
   #define DBG_REMOTE(...)
   #define DBGLN_REMOTE(...)
   #endif
+
   // ===============================================================================================
 
   // AVR-specific include for program memory storage
@@ -308,6 +326,13 @@
     uint16_t maxDistance;
   };
 
+  // Battery warning/shutdown policy state. Inactivity sleep is handled separately.
+  enum class BatteryState : uint8_t {
+    Normal = 0,
+    Warning,
+    Shutdown
+  };
+
   // LED expander pin mapping helper.
   struct LedRoute;
 
@@ -348,7 +373,21 @@
   int get2SBatteryPercent(float voltage);
   uint8_t classifyTrackMarkerColor(uint16_t r, uint16_t g, uint16_t b, uint16_t c);
   void handleTrackMarkerAction(uint8_t markerClass);
-  #if DEBUG || DEBUG_COLOR_SENSOR
+  void SetRearRedLight(bool enabled);
+  void enterBatteryWarning();
+  void exitBatteryWarning();
+  void enterBatteryShutdown(bool startupLockout = false);
+  void exitBatteryShutdown();
+  void updateBatterySignal();
+  bool areUserSoundsAllowed();
+  bool areRgbLightsAllowed();
+  bool isGreenIndicatorAllowed();
+  bool isColorSensorAllowed();
+  bool isAutoDistanceAllowed();
+  bool isBoostAllowed();
+  bool canEnterIdleSleep();
+  bool isWarningModeCommandAllowed(uint8_t code);
+  #if DEBUG_COLOR_SENSOR
   const __FlashStringHelper* trackMarkerLabel(uint8_t markerClass);
   #endif
 
@@ -1000,6 +1039,8 @@
   const LedRoute led2G = { 4 };
   const LedRoute led2B = { 5 };
   const LedRoute ledGreen = { 6 };
+  // GP7 drives two rear red LEDs wired in parallel and treated as one warning/shutdown indicator.
+  const LedRoute ledRearRed = { 7 };
 
   // D4 is dedicated to the TCS34725 breakout LED control input in this revision.
   const int pinColorSensorLED = 4;
@@ -1034,6 +1075,7 @@
   const int pattern_descend[] = { 120, 80, 120, 80, 120, 0 };
   const int pattern_horn[] = { 1000, 100, 0 };
   const int pattern_tiltBeep[] = { 500, 0 };  // single 0.5s beep
+  const int16_t melodyWakeReady[] = { 988, 120, 1319, 180 };
 
   // ================================================================================================
   // Other constants
@@ -1053,8 +1095,21 @@
   const int AUTO_DISTANCE_MAX_SPEED = 50;  // distance to obstacle >= cm to run at max speed
   const float BATTERY_LOW_WARNING = 7.25;  // warn at this voltage (judged only while stopped)
   const float BATTERY_LOW_SHUTDOWN = 7.15; // force stop at this voltage (judged only while stopped)
+  const float BATTERY_WARNING_RECOVERY = 7.35;   // Leave warning mode only after a small recharge margin.
+  const float BATTERY_SHUTDOWN_RECOVERY = 7.30;  // Recharge-only recovery point for shutdown lockout.
   const unsigned long BATTERY_CHECK_INTERVAL_MS = 5000;  // minimum gap between low-battery checks
-  const float MAX_SAFE_MOTOR_VOLTAGE = 6.0;
+  const unsigned long BATTERY_WARNING_SIGNAL_MS = 3000UL;
+  const unsigned long BATTERY_WARNING_REPEAT_MS = 60000UL;
+  const unsigned long BATTERY_SHUTDOWN_SIGNAL_MS = 10000UL;
+  const unsigned long IDLE_SLEEP_HEARTBEAT_MS = 32000UL;
+  const unsigned long IDLE_SLEEP_HEARTBEAT_ON_MS = 100UL;
+  const uint16_t BATTERY_ALERT_TONE_HZ = 1500;
+  const float MAX_SAFE_MOTOR_VOLTAGE = 7.0;
+  const float NORMAL_MAX_MOTOR_VOLTAGE = 6.0;
+  const uint8_t NORMAL_MAX_SPEED_STEP = 3;
+  const uint8_t BOOST_SPEED_STEP = 4;
+  const unsigned long BOOST_DURATION_MS = 10000UL;
+  const unsigned long BOOST_COOLDOWN_MS = 50000UL;
 
   // ================================================================================================
   // Control variables
@@ -1063,6 +1118,7 @@
   bool SoundOnOff = true;
   bool AutoDistanceOnOff = false;
   bool ColorSensorOnOff = false;
+  BatteryState batteryState = BatteryState::Normal;
   uint8_t MotorDirection = 1;   // always has a direction
   uint8_t Speed = 0;            // stopped at start
   uint8_t Distance = 0;         // Latest distance from the VL53L0X
@@ -1076,6 +1132,7 @@
   bool motorFaultLatched = false;
   bool motorDriveAttemptedSinceFault = true;  // Track if motor run was attempted after fault
   #if ENABLE_EEPROM_LOGGING
+  uint16_t currentBootSequence = 0;
   uint8_t currentBootSlot = 0xFF;  // Ring buffer slot index for current boot session
   uint8_t bootFaultCount = 0;      // Motor fault counter for current power-on session (0..16)
   #endif
@@ -1091,6 +1148,7 @@
   bool lastWasRepeat = false;
 
   // Timers
+  unsigned long bootStartedAt = 0;
   unsigned long lastActive = 0;
   const unsigned long idleTimeout = 5UL * 60UL * 1000UL;  // 5 minutes
   unsigned long lastColorSensorRead = 0;
@@ -1098,6 +1156,13 @@
   uint8_t lastTrackMarkerClass = 255;
   unsigned long lastBatteryDebugPrintMs = 0;
   unsigned long lastBatteryCheckMs = 0;
+  unsigned long lastBatteryWarningSignalMs = 0;
+  unsigned long batterySignalEndsAt = 0;
+  bool batterySignalActive = false;
+  bool batterySignalUsesTone = false;
+  bool idleSleepActive = false;
+  volatile bool idleWakeRequested = false;
+  bool shutdownSignalPlayedThisBoot = false;
 
   // Non-blocking green status-LED acknowledgement blink
   uint8_t greenBlinkRemaining = 0;
@@ -1109,40 +1174,57 @@
   // Non-blocking reverse-direction cooldown
   unsigned long motorReverseReadyAt = 0;
   bool motorDrivePending = false;
+  bool boostActive = false;
+  unsigned long boostEndsAt = 0;
+  unsigned long boostCooldownEndsAt = 0;
 
   // ================================================
-  // BEGIN: generated from rgb-color-sensor\calibration_tool.py analyze-clusters
-  // Source artifact: rgb-color-sensor\data\generated-clusters.txt
+  // BEGIN: generated from rgb-color-sensor\calibration_tool.py analyze-clusters --target train
+  // Source data: rgb-color-sensor\data
+  // Regenerate with: python rgb-color-sensor\calibration_tool.py analyze-clusters --input rgb-color-sensor\data --target train
   // Mounting: aim for ~3 mm sensor-to-marker gap (usable 2-5 mm), fixed height and angle, LED on.
   // ================================================
+  // Generated by rgb-color-sensor/calibration_tool.py analyze-clusters --target train
   const uint16_t colorClearMinThreshold = 160;
   const uint16_t colorMatchClearThreshold = 304;
-  const float whiteBalanceRedGain = 1.00f;
+  const float whiteBalanceRedGain = 1.000f;
   const float whiteBalanceGreenGain = 1.212f;
   const float whiteBalanceBlueGain = 2.318f;
 
   const MarkerClusterDefinition markerClusters[] = {
-    { MarkerWhite,   { 334, 333, 333 }, 32 },
-    { MarkerBrown,   { 392, 322, 287 }, 31 },
-    { MarkerBrown,   { 415, 305, 280 }, 22 },
-    { MarkerBrown,   { 428, 289, 284 }, 25 },
-    { MarkerCyan,    { 158, 313, 529 }, 60 },
-    { MarkerGreen,   { 160, 518, 322 }, 62 },
-    { MarkerGreen,   { 203, 482, 315 }, 52 },
-    { MarkerGrey,    { 303, 345, 352 }, 38 },
-    { MarkerGrey,    { 327, 331, 342 }, 22 },
-    { MarkerGrey,    { 347, 317, 336 }, 27 },
+    // White: 1 cluster(s), mean_distance=14.8
+    { MarkerWhite, { 334, 333, 333 }, 32 },
+    // Brown: 3 cluster(s), mean_distance=12.0
+    { MarkerBrown, { 392, 322, 287 }, 31 },
+    { MarkerBrown, { 415, 305, 280 }, 22 },
+    { MarkerBrown, { 428, 289, 284 }, 25 },
+    // Cyan: 1 cluster(s), mean_distance=38.6
+    { MarkerCyan, { 158, 313, 529 }, 60 },
+    // Green: 2 cluster(s), mean_distance=24.9
+    { MarkerGreen, { 160, 518, 322 }, 62 },
+    { MarkerGreen, { 203, 482, 315 }, 52 },
+    // Grey: 3 cluster(s), mean_distance=12.6
+    { MarkerGrey, { 303, 345, 352 }, 38 },
+    { MarkerGrey, { 327, 331, 342 }, 22 },
+    { MarkerGrey, { 347, 317, 336 }, 27 },
+    // Magenta: 3 cluster(s), mean_distance=7.2
     { MarkerMagenta, { 455, 201, 344 }, 14 },
     { MarkerMagenta, { 476, 193, 331 }, 18 },
     { MarkerMagenta, { 488, 186, 326 }, 10 },
-    { MarkerOrange,  { 542, 254, 204 }, 22 },
-    { MarkerRed,     { 514, 180, 305 }, 27 },
-    { MarkerRed,     { 550, 191, 259 }, 36 },
-    { MarkerRed,     { 572, 176, 252 }, 22 },
-    { MarkerYellow,  { 420, 368, 212 }, 14 },
-    { MarkerYellow,  { 432, 353, 215 }, 18 }
+    // Orange: 1 cluster(s), mean_distance=12.9
+    { MarkerOrange, { 542, 254, 204 }, 22 },
+    // Red: 3 cluster(s), mean_distance=12.6
+    { MarkerRed, { 514, 180, 305 }, 27 },
+    { MarkerRed, { 550, 191, 259 }, 36 },
+    { MarkerRed, { 572, 176, 252 }, 22 },
+    // Yellow: 2 cluster(s), mean_distance=8.4
+    { MarkerYellow, { 420, 368, 212 }, 14 },
+    { MarkerYellow, { 432, 353, 215 }, 18 },
   };
+
   const uint8_t markerClusterCount = sizeof(markerClusters) / sizeof(markerClusters[0]);
+
+  // Reference only: black max clear=835, nothing max clear=159
   // ================================================
   // END: generated from rgb-color-sensor\calibration_tool.py analyze-clusters
   // ================================================
@@ -1152,8 +1234,8 @@
   // Action bodies are placeholders for now - define each behavior in handleTrackMarkerAction().
 
   // Speed steps (voltage → PWM)
-  uint8_t pwmSteps[4];  // 0..255
-  float voltageSteps[] = { 0.0, 3.5, 4.5, 6.0 };
+  uint8_t pwmSteps[5];  // 0..255
+  float voltageSteps[] = { 0.0, 3.5, 4.5, 6.0, 7.0 };
   float batteryVoltage = 0.0;
 
   TrainDistanceSensorVL53L0X distanceTof;
@@ -1171,18 +1253,7 @@
   unsigned long buzzerTimer = 0;
 
   // Manual step index
-  uint8_t currentStep = 0;  // 0=stop, 1=~3.5V, 2=~4.5V, 3=~6V
-
-  // Optional future upgrade: measure motor current with a shunt + amplifier/monitor.
-  // Use this for load-aware behavior or soft limits; nFAULT only reports hard driver faults.
-  // // Current sense
-  // const int pinMotorSense = A2;   // shunt resistor voltage
-  // const float shuntResistor = 0.1; // ohms
-  // const float maxSafeCurrent = 0.8; // amps (cutoff threshold)
-
-  // // Overcurrent detection
-  // unsigned long overCurrentStart = 0;
-  // bool overCurrentActive = false;
+  uint8_t currentStep = 0;  // 0=stop, 1=~3.5V, 2=~4.5V, 3=~6V, 4=~7V boost
 
   // Siren state
   bool sirenActive = false;
@@ -1226,7 +1297,7 @@
       return;
     }
 
-    const LedRoute routes[] = { led1R, led1G, led1B, led2R, led2G, led2B, ledGreen };
+    const LedRoute routes[] = { led1R, led1G, led1B, led2R, led2G, led2B, ledGreen, ledRearRed };
     for (uint8_t i = 0; i < sizeof(routes) / sizeof(routes[0]); ++i) {
       trainLedExpander.pinMode(routes[i].expanderPin, OUTPUT);
       trainLedExpander.digitalWrite(routes[i].expanderPin, LOW);
@@ -1258,6 +1329,10 @@
 
   // Toggle color-sensor mode and related status lighting.
   void setColorSensorEnabled(bool enabled) {
+    if (enabled && !isColorSensorAllowed()) {
+      DBGLN_COLOR_SENSOR(F("Ignored: color sensor disabled by battery policy"));
+      return;
+    }
     if (enabled && !colorSensorDetected) {
       DBGLN_COLOR_SENSOR(F("Ignored: TCS34725 not detected"));
       return;
@@ -1330,7 +1405,7 @@
     return (uint8_t)bestClass;
   }
 
-  #if DEBUG || DEBUG_COLOR_SENSOR
+  #if DEBUG_COLOR_SENSOR
   // Debug-only marker name lookup.
   const __FlashStringHelper* trackMarkerLabel(uint8_t markerClass) {
     switch (markerClass) {
@@ -1403,7 +1478,7 @@
     uint16_t r = 0, g = 0, b = 0, c = 0;
     colorSensor.readRawData(&r, &g, &b, &c);
     uint8_t markerClass = classifyTrackMarkerColor(r, g, b, c);
-    #if DEBUG || DEBUG_COLOR_SENSOR
+    #if DEBUG_COLOR_SENSOR
     const __FlashStringHelper* markerLabel = trackMarkerLabel(markerClass);
     DBG_COLOR_SENSOR(F("TCS34725 RGBC: "));
     DBG_COLOR_SENSOR(r);
@@ -1419,7 +1494,7 @@
 
     if (markerClass != lastTrackMarkerClass) {
       lastTrackMarkerClass = markerClass;
-      #if DEBUG || DEBUG_COLOR_SENSOR
+      #if DEBUG_COLOR_SENSOR
       DBG_COLOR_SENSOR(F("Track marker changed to: "));
       DBGLN_COLOR_SENSOR(markerLabel);
       #endif
@@ -1429,6 +1504,11 @@
 
   // Restore status lights from the current drive state.
   void refreshDriveLights() {
+    if (!areRgbLightsAllowed()) {
+      SetRGBLightColor(RgbColor::Off);
+      SetGreenLightValue(0);
+      return;
+    }
     if (sirenActive) return;
 
     SetGreenLightValue(AutoDistanceOnOff ? 255 : 0);
@@ -1462,6 +1542,23 @@
   }
 
   #if ENABLE_EEPROM_LOGGING
+  void logBatteryEvent(uint8_t eventType, float voltage) {
+    uint8_t eventHead = EEPROM.read(EEPROM_ADDR_EVENT_HEAD);
+    if (eventHead >= EEPROM_EVENT_LOG_SIZE) eventHead = 0;
+
+    uint8_t battByte = (voltage > 0.0f)
+                       ? (uint8_t)constrain((int)(voltage * 10.0f + 0.5f), 0, 254)
+                       : 0xFF;
+    uint16_t entryAddr = EEPROM_ADDR_EVENT_BASE + (uint16_t)eventHead * EEPROM_EVENT_ENTRY_SIZE;
+    uint32_t uptimeMs = millis() - bootStartedAt;
+
+    EEPROM.put(entryAddr, currentBootSequence);
+    EEPROM.update(entryAddr + 2, eventType);
+    EEPROM.update(entryAddr + 3, battByte);
+    EEPROM.put(entryAddr + 4, uptimeMs);
+    EEPROM.update(EEPROM_ADDR_EVENT_HEAD, (uint8_t)((eventHead + 1) % EEPROM_EVENT_LOG_SIZE));
+  }
+
   // Log boot sequence number (2-byte timestamp), sensor error flags, battery voltage, and initial
   // fault count (0) to the EEPROM ring buffer. Must be called after initBatteryVoltageMeterHardware()
   // and after batteryVoltage has been set.
@@ -1472,6 +1569,7 @@
     EEPROM.get(EEPROM_ADDR_BOOT_COUNT, bootSeq);
     bootSeq = (bootSeq == 0xFFFF) ? 1 : (uint16_t)(bootSeq + 1);
     EEPROM.put(EEPROM_ADDR_BOOT_COUNT, bootSeq);
+    currentBootSequence = bootSeq;
 
     uint8_t flags = 0;
     if (!trainLedExpanderDetected) flags |= ERR_LED_EXPANDER;
@@ -1516,9 +1614,145 @@
   }
   #endif
 
+  bool areUserSoundsAllowed() {
+    return batteryState == BatteryState::Normal;
+  }
+
+  bool areRgbLightsAllowed() {
+    return batteryState == BatteryState::Normal && !idleSleepActive;
+  }
+
+  bool isGreenIndicatorAllowed() {
+    return batteryState == BatteryState::Normal && !idleSleepActive;
+  }
+
+  bool isColorSensorAllowed() {
+    return batteryState == BatteryState::Normal;
+  }
+
+  bool isAutoDistanceAllowed() {
+    return batteryState == BatteryState::Normal;
+  }
+
+  bool isBoostAllowed() {
+    return batteryState == BatteryState::Normal;
+  }
+
+  bool canEnterIdleSleep() {
+    return batteryState == BatteryState::Normal;
+  }
+
+  bool isWarningModeCommandAllowed(uint8_t code) {
+    return code == buttonCHminus || code == buttonCH || code == buttonCHplus
+      || code == buttonBackward || code == buttonForward;
+  }
+
+  void updateBatterySignal() {
+    if (!batterySignalActive) return;
+    if ((long)(millis() - batterySignalEndsAt) < 0) {
+      SetRearRedLight(true);
+      if (batterySignalUsesTone) tone(pinBuzzer, BATTERY_ALERT_TONE_HZ);
+      return;
+    }
+
+    batterySignalActive = false;
+    batterySignalUsesTone = false;
+    SetRearRedLight(false);
+    noTone(pinBuzzer);
+    digitalWrite(pinBuzzer, LOW);
+  }
+
+  void startBatterySignal(unsigned long durationMs, bool useTone) {
+    batterySignalActive = true;
+    batterySignalUsesTone = useTone;
+    batterySignalEndsAt = millis() + durationMs;
+    sirenActive = false;
+    stopMelody();
+    clearBuzzerPattern();
+    noTone(pinBuzzer);
+    digitalWrite(pinBuzzer, LOW);
+    SetRearRedLight(true);
+    if (useTone) tone(pinBuzzer, BATTERY_ALERT_TONE_HZ);
+  }
+
+  void applyBatteryRestrictions() {
+    if (boostActive) Stop();
+    boostActive = false;
+    cancelJog();
+    exitAutoDistanceMode();
+    currentStep = min(currentStep, NORMAL_MAX_SPEED_STEP);
+    setColorSensorEnabled(false);
+    sirenActive = false;
+    stopMelody();
+    clearBuzzerPattern();
+    noTone(pinBuzzer);
+    digitalWrite(pinBuzzer, LOW);
+    SetGreenLightValue(0);
+    SetRGBLightColor(RgbColor::Off);
+  }
+
+  void enterBatteryWarning() {
+    if (batteryState == BatteryState::Warning) return;
+    batteryState = BatteryState::Warning;
+    applyBatteryRestrictions();
+    lastBatteryWarningSignalMs = millis();
+    startBatterySignal(BATTERY_WARNING_SIGNAL_MS, true);
+    #if ENABLE_EEPROM_LOGGING
+    logBatteryEvent(EEPROM_EVENT_WARNING, batteryVoltage);
+    #endif
+  }
+
+  void exitBatteryWarning() {
+    if (batteryState != BatteryState::Warning) return;
+    batteryState = BatteryState::Normal;
+    lastBatteryWarningSignalMs = 0;
+    if (!batterySignalActive) SetRearRedLight(false);
+    refreshDriveLights();
+  }
+
+  void enterBatteryShutdown(bool startupLockout) {
+    if (batteryState == BatteryState::Shutdown) {
+      if (startupLockout && !shutdownSignalPlayedThisBoot) {
+        shutdownSignalPlayedThisBoot = true;
+        startBatterySignal(BATTERY_SHUTDOWN_SIGNAL_MS, true);
+      }
+      return;
+    }
+
+    batteryState = BatteryState::Shutdown;
+    shutdownSignalPlayedThisBoot = startupLockout;
+    applyBatteryRestrictions();
+    stopAndResetStepSelection(true);
+    digitalWrite(pinMotorSleep, LOW);
+    digitalWrite(pinVL53L0X_XSHUT, LOW);
+    distanceTofDetected = false;
+    startBatterySignal(BATTERY_SHUTDOWN_SIGNAL_MS, true);
+    #if ENABLE_EEPROM_LOGGING
+    logBatteryEvent(EEPROM_EVENT_SHUTDOWN, batteryVoltage);
+    #endif
+  }
+
+  void exitBatteryShutdown() {
+    if (batteryState != BatteryState::Shutdown) return;
+    batteryState = BatteryState::Normal;
+    shutdownSignalPlayedThisBoot = false;
+    batterySignalActive = false;
+    batterySignalUsesTone = false;
+    SetRearRedLight(false);
+    noTone(pinBuzzer);
+    digitalWrite(pinBuzzer, LOW);
+    digitalWrite(pinVL53L0X_XSHUT, HIGH);
+    delay(10);
+    startDistanceSensorRanging();
+    digitalWrite(pinMotorSleep, HIGH);
+    delay(1);
+    refreshDriveLights();
+  }
+
   // One-time hardware initialization and startup behavior.
   // Initialize hardware and startup state.
   void setup() {
+    bootStartedAt = millis();
 
     // Hardware reset the VL53L0X to allow address change and avoid conflict with TCS34725.
     pinMode(pinVL53L0X_XSHUT, OUTPUT);
@@ -1555,10 +1789,16 @@
     writeBootErrorCodes();
     #endif
 
+    if (batteryVoltage <= BATTERY_LOW_SHUTDOWN) {
+      enterBatteryShutdown(true);
+    } else if (batteryVoltage <= BATTERY_LOW_WARNING) {
+      enterBatteryWarning();
+    }
+
     //playPattern(pattern_melody);  // Play melody
     SetGreenLightValue(0);
     SetRGBColor(FrontLightOnOff ? RgbColor::Red : RgbColor::Off);
-    playToneSequence_P(melodyDemo, false);
+    if (batteryState == BatteryState::Normal) playToneSequence_P(melodyDemo, false);
 
     // Configure dynamic speed steps
     configureSpeedSteps();
@@ -1578,12 +1818,13 @@
     updateMotorFault();
 
     // === 2. Idle timeout watchdog ===
-    if (millis() - lastActive > idleTimeout) {
+    if (canEnterIdleSleep() && millis() - lastActive > idleTimeout) {
       goToIdle();
     }
 
     // === 2b. Low-battery guard (only judged while stopped) ===
     updateBatteryGuard();
+    updateBatterySignal();
 
     // === 3. Jog watchdog (safety if button released) ===
     if (!motorFaultLatched && momentaryActive && (millis() - momentaryLastSeen > momentaryTimeout)) {
@@ -1596,6 +1837,12 @@
     // === 4. Auto-speed mode ===
     if (!motorFaultLatched && AutoDistanceOnOff == 1) {
       updateAutoDistanceSpeed();
+    }
+    if (boostActive && (long)(millis() - boostEndsAt) >= 0) {
+      boostActive = false;
+      boostCooldownEndsAt = millis() + BOOST_COOLDOWN_MS;
+      currentStep = NORMAL_MAX_SPEED_STEP;
+      applySpeedStep();
     }
 
     // === 5. Tilt sensor ===
@@ -1623,6 +1870,7 @@
   // Shut down outputs and enter low-power sleep.
   void goToIdle() {
     DBGLN_IR_REMOTE(F("Idle: turning everything off..."));
+    idleSleepActive = true;
 
     digitalWrite(pinBuzzer, LOW);
     buzzerPattern[0] = 0;
@@ -1641,9 +1889,21 @@
 
     digitalWrite(pinMotorSleep, LOW);  // Disable the DRV8833 while the Arduino sleeps.
     digitalWrite(pinVL53L0X_XSHUT, LOW); // Turn off VL53L0X for sleep
+    idleWakeRequested = false;
     attachInterrupt(digitalPinToInterrupt(pinIRReceiver), wakeUp, CHANGE);
-    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
+    unsigned long lastHeartbeat = 0;
+    while (!idleWakeRequested) {
+      unsigned long now = millis();
+      if (now - lastHeartbeat >= IDLE_SLEEP_HEARTBEAT_MS) {
+        SetRearRedLight(true);
+        delay(IDLE_SLEEP_HEARTBEAT_ON_MS);
+        SetRearRedLight(false);
+        lastHeartbeat = now;
+      }
+      LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_OFF);
+    }
     detachInterrupt(digitalPinToInterrupt(pinIRReceiver));
+    idleSleepActive = false;
 
     digitalWrite(pinVL53L0X_XSHUT, HIGH); // Wake up VL53L0X
     delay(10); // boot time
@@ -1653,17 +1913,21 @@
     delay(1);  // DRV8833 wake-up time before checking its diagnostic output.
     initBatteryVoltageMeterHardware();  // ADC was powered down; re-establish the 1.1V reference.
     lastActive = millis();
+    playToneSequence_P(melodyWakeReady, false);
+    refreshDriveLights();
   }
 
   // Interrupt callback used only to wake the MCU.
-  void wakeUp() {}
+  void wakeUp() {
+    idleWakeRequested = true;
+  }
 
   // Measure battery voltage directly under the current load.
   // Read pack voltage through the resistor divider.
   float getBatteryVoltageDirect() {
     float sum = 0.0;
     const float dividerRatio = (R1 + R2) / R2;  // constant for this board
-    #if DEBUG || DEBUG_VOLTAGE_METER
+    #if DEBUG_VOLTAGE_METER
     unsigned long rawSum = 0;
     #endif
 
@@ -1672,7 +1936,7 @@
 
     for (uint8_t sampleIndex = 0; sampleIndex < BATTERY_ADC_SAMPLES; ++sampleIndex) {
       int rawValue = analogRead(pinBatterySense);
-      #if DEBUG || DEBUG_VOLTAGE_METER
+      #if DEBUG_VOLTAGE_METER
       rawSum += rawValue;
       #endif
       float pinVoltage = (rawValue * BATTERY_ADC_REF_VOLTAGE) / BATTERY_ADC_MAX;
@@ -1681,7 +1945,7 @@
 
     float averagedVoltage = sum / BATTERY_ADC_SAMPLES;
 
-    #if DEBUG || DEBUG_VOLTAGE_METER
+    #if DEBUG_VOLTAGE_METER
     unsigned long now = millis();
     if (now - lastBatteryDebugPrintMs >= 1000UL) {
       lastBatteryDebugPrintMs = now;
@@ -1719,28 +1983,39 @@
   // Judge pack health only while stopped (no motor sag) and no more than once per interval.
   // Periodically check voltage and enforce low-battery limits.
   void updateBatteryGuard() {
-    if (Speed != 0 || motorFaultLatched) return;
     unsigned long now = millis();
+    if (batteryState == BatteryState::Warning
+        && !batterySignalActive
+        && now - lastBatteryWarningSignalMs >= BATTERY_WARNING_REPEAT_MS) {
+      lastBatteryWarningSignalMs = now;
+      startBatterySignal(BATTERY_WARNING_SIGNAL_MS, true);
+    }
+
+    if (batteryState != BatteryState::Shutdown && (Speed != 0 || motorFaultLatched)) return;
     if (now - lastBatteryCheckMs < BATTERY_CHECK_INTERVAL_MS) return;
     lastBatteryCheckMs = now;
 
-    float v = getBatteryVoltageDirect();  // motor off => reading is sag-free
+    float v = getBatteryVoltageDirect();  // while stopped or shutdown-locked => closest available pack reading
     if (v <= 0) return;
     batteryVoltage = v;
 
+    if (batteryState == BatteryState::Shutdown) {
+      if (v >= BATTERY_SHUTDOWN_RECOVERY) {
+        DBGLN_VOLTAGE_METER(F("Battery recovered above shutdown lockout"));
+        exitBatteryShutdown();
+      }
+      return;
+    }
+
     if (v <= BATTERY_LOW_SHUTDOWN) {
-      DBGLN_VOLTAGE_METER(F("Battery SHUTDOWN level: forcing stop"));
-      setColorSensorEnabled(false);
-      exitAutoDistanceMode(false);
-      cancelJog();
-      stopAndResetStepSelection();
-      SetRGBColor(RgbColor::Red);
-      playPattern(pattern_batteryWarn);
+      DBGLN_VOLTAGE_METER(F("Battery SHUTDOWN level: entering lockout"));
+      enterBatteryShutdown();
     } else if (v <= BATTERY_LOW_WARNING) {
       DBGLN_VOLTAGE_METER(F("Battery WARNING level"));
-      setColorSensorEnabled(false);
-      SetRGBColor(RgbColor::Red);
-      playPattern(pattern_batteryWarn);
+      enterBatteryWarning();
+    } else if (batteryState == BatteryState::Warning && v >= BATTERY_WARNING_RECOVERY) {
+      DBGLN_VOLTAGE_METER(F("Battery warning cleared after recharge margin"));
+      exitBatteryWarning();
     }
   }
 
@@ -1796,7 +2071,7 @@
 
   // Audible confirmation for the selected manual step.
   void playStepBeep(int step) {
-    if (SoundOnOff != 1) return;  // respect mute
+    if (!areUserSoundsAllowed() || SoundOnOff != 1) return;  // respect mute and battery policy
     clearBuzzerPattern();
     int idx = 0;
     if (step == 0) {
@@ -1834,11 +2109,21 @@
   // CH- and CH+ adjust the current drive step through these thin wrappers.
   // Move between manual drive steps.
   void increaseStep() {
-    if (currentStep < 3) currentStep++;
+    if (currentStep < NORMAL_MAX_SPEED_STEP) {
+      currentStep++;
+    } else if (isBoostAllowed() && currentStep == NORMAL_MAX_SPEED_STEP && (long)(millis() - boostCooldownEndsAt) >= 0) {
+      currentStep = BOOST_SPEED_STEP;
+      boostActive = true;
+      boostEndsAt = millis() + BOOST_DURATION_MS;
+    }
     applySpeedStep();
   }
   // Move between manual drive steps.
   void decreaseStep() {
+    if (boostActive) {
+      boostActive = false;
+      boostCooldownEndsAt = millis() + BOOST_COOLDOWN_MS;
+    }
     if (currentStep > 0) currentStep--;
     applySpeedStep();
   }
@@ -1854,7 +2139,7 @@
 
     int lastIdx = sizeof(voltageSteps) / sizeof(voltageSteps[0]) - 1;
     float minV = min(MAX_SAFE_MOTOR_VOLTAGE, voltageSteps[1]);        // ≈3.5V
-    float maxV = min(MAX_SAFE_MOTOR_VOLTAGE, voltageSteps[lastIdx]);  // ≈6.0V
+    float maxV = min(NORMAL_MAX_MOTOR_VOLTAGE, voltageSteps[NORMAL_MAX_SPEED_STEP]);  // ≈6.0V
 
     if (distance < AUTO_DISTANCE_MAX_SPEED) {
       float spanV = (maxV - minV);
@@ -1868,6 +2153,10 @@
   // Poll distance, compute target speed, and hand off ramping to updateMotorSpeed().
   // Run the automatic speed controller.
   void updateAutoDistanceSpeed() {
+    if (!isAutoDistanceAllowed()) {
+      exitAutoDistanceMode();
+      return;
+    }
     Distance = getDistanceReading();
 
     DBG_DISTANCE_SENSOR(F("Distance: "));
@@ -2180,6 +2469,10 @@
 
   // Coast the motor to an idle state.
   void Stop() {
+    if (boostActive) {
+      boostActive = false;
+      boostCooldownEndsAt = millis() + BOOST_COOLDOWN_MS;
+    }
     setMotor(Dir::Stop, 0);
     motorDrivePending = false;  // cancel any deferred reverse drive
   }
@@ -2247,6 +2540,16 @@
         SetRGBColor(RgbColor::Red);
         cancelJog();
       }
+      return;
+    }
+
+    if (batteryState == BatteryState::Shutdown) {
+      if (!lastWasRepeat) DBGLN_IR_REMOTE(F("Ignored: battery shutdown lockout"));
+      return;
+    }
+
+    if (batteryState == BatteryState::Warning && !isWarningModeCommandAllowed(code)) {
+      if (!lastWasRepeat) DBGLN_IR_REMOTE(F("Ignored: battery warning restrictions"));
       return;
     }
 
@@ -2359,6 +2662,7 @@
 
       case buttonPlayPause:
         {  // Auto-speed toggle
+          if (boostActive) Stop();
           AutoDistanceOnOff = !AutoDistanceOnOff;
           SetGreenLightValue(AutoDistanceOnOff ? 255 : 0);
           if (AutoDistanceOnOff) {
@@ -2455,6 +2759,7 @@
   // Advance non-blocking buzzer patterns.
   void updateBuzzer() {
     // Siren owns the buzzer while active; queued patterns resume once the siren stops.
+    if (batterySignalActive) return;
     if (sirenActive) return;
     if (buzzerPattern[buzzerIndex] == 0) return;
     unsigned long now = millis();
@@ -2477,7 +2782,7 @@
   // ------------------------------------------------------------------------------------------------
   // Start a predefined buzzer pattern.
   void playPattern(const int* pattern) {
-    if (SoundOnOff != 1) return;
+    if (!areUserSoundsAllowed() || SoundOnOff != 1) return;
     digitalWrite(pinBuzzer, LOW);
     clearBuzzerPattern();
 
@@ -2500,7 +2805,7 @@
   // ------------------------------------------------------------------------------------------------
   // Speak battery voltage with long/short beeps.
   void playVoltagePattern(float batteryPercent) {
-    if (SoundOnOff != 1) return;
+    if (!areUserSoundsAllowed() || SoundOnOff != 1) return;
     digitalWrite(pinBuzzer, LOW);
     clearBuzzerPattern();
 
@@ -2548,10 +2853,20 @@
     writeTrainOutput(bPin, B);
   }
 
+  // Rear red OUT7 channel is reserved for battery warning, shutdown, and inactivity-sleep indication.
+  void SetRearRedLight(bool enabled) {
+    writeTrainOutput(ledRearRed, enabled);
+  }
+
   // Apply raw RGB channel states to one headlight or both.
   // Apply raw RGB values to one or both headlights.
   void SetRGBLight(bool R, bool G, bool B, int led) {
     if (FrontLightOnOff == 0) return;
+    if (!areRgbLightsAllowed()) {
+      R = false;
+      G = false;
+      B = false;
+    }
     if (led == 0 || led == 1) writeRGBPins(led1R, led1G, led1B, R, G, B);
     if (led == 0 || led == 2) writeRGBPins(led2R, led2G, led2B, R, G, B);
   }
@@ -2587,6 +2902,7 @@
   void SetGreenLightValue(int Value) {
     // analogWrite(pinLEDGreen, Value);
     // The green status LED is driven through the expander-backed output stage.
+    if (!isGreenIndicatorAllowed()) Value = 0;
     writeTrainOutput(ledGreen, (Value > 0));  // Any non-zero means ON
   }
 
@@ -2621,43 +2937,16 @@
     }
   }
 
-  /*
-  // Direct Nano fallback block kept for possible rollback from the MCP23008.
-
-  // Direct-pin LED route mapping helper.
-  struct LedRoute {
-    // Direct Nano GPIO pin used by the fallback mapping.
-    uint8_t directPin;
-  };
-
-  const LedRoute led1R = { 11 };
-  const LedRoute led1G = { 3 };
-  const LedRoute led1B = { 4 };
-  const LedRoute led2R = { 7 };
-  const LedRoute led2G = { 8 };
-  const LedRoute led2B = { 9 };
-  const LedRoute ledGreen = { 10 };
-  const int pinColorSensorLED = -1;
-
-  void initTrainLedHardware() {
-    const LedRoute routes[] = { led1R, led1G, led1B, led2R, led2G, led2B, ledGreen };
-    for (uint8_t i = 0; i < sizeof(routes) / sizeof(routes[0]); ++i) {
-      pinMode(routes[i].directPin, OUTPUT);
-      digitalWrite(routes[i].directPin, LOW);
-    }
-
-    DBGLN_LEDS(F("Direct train LED pins ready"));
-  }
-
-  inline void writeTrainOutput(const LedRoute& route, bool Value) {
-    digitalWrite(route.directPin, Value ? HIGH : LOW);
-  }
-  */
-
   // Siren animation is time-based so pitch and light sweep remain stable if loop timing varies.
   // Animate siren lights and pitch sweep.
   void updateSiren() {
     if (!sirenActive) return;
+    if (!areUserSoundsAllowed()) {
+      sirenActive = false;
+      noTone(pinBuzzer);
+      SetRGBLightColor(RgbColor::Off);
+      return;
+    }
 
     unsigned long now = millis();
 
@@ -2766,7 +3055,7 @@
   // Advance non-blocking melody playback.
   void updateMelody() {
     if (!melodyPlaying) return;  // Exit if no melody is playing
-    if (SoundOnOff != 1 || sirenActive) {
+    if (!areUserSoundsAllowed() || SoundOnOff != 1 || sirenActive) {
       stopMelody();
       return;
     }  // Stop if sound is muted or siren is active
@@ -2808,7 +3097,7 @@
   // Load and start a melody from RAM or PROGMEM.
   void playToneSequenceRaw(const int* seqFD, int pairCount, bool loopPlayback, bool isProgmem) {
     if (pairCount <= 0) return;
-    if (SoundOnOff != 1) return;
+    if (!areUserSoundsAllowed() || SoundOnOff != 1) return;
 
     // Stop any ongoing buzzer pattern (non-melody)
     clearBuzzerPattern();

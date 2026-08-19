@@ -32,19 +32,19 @@ command. Its train target will emit valid Arduino/C++ declarations for:
 Each generated cluster entry will use the train's `TrackMarkerClass` enum
 constant rather than the generic recognition sketch's numeric label index.
 The formatter will derive those enum constants from a fixed, explicit mapping
-of supported capture labels:
+of canonical capture-label keys:
 
-| Capture label | Train marker enum |
+| Canonical capture label | Train marker enum |
 | --- | --- |
-| White | `MarkerWhite` |
-| Brown | `MarkerBrown` |
-| Cyan | `MarkerCyan` |
-| Green | `MarkerGreen` |
-| Grey | `MarkerGrey` |
-| Magenta | `MarkerMagenta` |
-| Orange | `MarkerOrange` |
-| Red | `MarkerRed` |
-| Yellow | `MarkerYellow` |
+| `white` | `MarkerWhite` |
+| `brown` | `MarkerBrown` |
+| `cyan` | `MarkerCyan` |
+| `green` | `MarkerGreen` |
+| `grey` | `MarkerGrey` |
+| `magenta` | `MarkerMagenta` |
+| `orange` | `MarkerOrange` |
+| `red` | `MarkerRed` |
+| `yellow` | `MarkerYellow` |
 
 The formatter must fail with a clear error when a capture label has no train
 marker mapping. It must not omit an unsupported color or substitute
