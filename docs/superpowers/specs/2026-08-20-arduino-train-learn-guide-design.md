@@ -2,7 +2,7 @@
 
 ## Goal
 
-Create `arduino-train-v2\docs-internal\LEARN.md`, a short beginner-friendly reference for the Arduino and C++ concepts that are actually used by the Arduino Train v2 sketch.
+Create `arduino-train-v2\docs-internal\LEARN.md`, a short beginner-friendly reference for the Arduino and C++ concepts that are actually used by the Arduino Train v2 sketch. Target approximately 1,500-2,500 words, readable in about 10 minutes.
 
 ## Audience and scope
 
@@ -23,8 +23,9 @@ The reader is comfortable following the train README but is still learning Ardui
 4. Arduino hardware basics:
    - pin modes and digital/analog reads and writes;
    - PWM and what `analogWrite()` really does;
-   - Nano timer ownership, including the IRremote Timer1 / `tone()` Timer2 arrangement and the D9/D10 limitation;
-   - I2C addressing and shared SDA/SCL devices;
+   - Nano timer ownership, including the IRremote Timer1 / `tone()` Timer2 arrangement, the D9/D10 limitation, and the D3/D11 PWM interaction while Timer2 is active;
+   - the project pin/timer/I2C summary table;
+   - I2C addressing and shared SDA/SCL devices, including the two devices that initially use address `0x29`, VL53L0X `XSHUT` sequencing, and reassignment to `0x2A`;
    - active-low inputs and pull-ups.
 5. Timing and control flow:
    - `setup()`/`loop()`;
