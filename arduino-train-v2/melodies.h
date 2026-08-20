@@ -1,3 +1,19 @@
+// ================================================================================================
+// File description
+// ================================================================================================
+// PROGMEM melody data used by the train's non-blocking tone player.
+// These arrays contain flat [frequency, duration_ms] pairs.
+// Every melody below is declared "const int16_t ... [] PROGMEM". Without PROGMEM, all of this note
+// data would be copied into SRAM at startup and stay there permanently - and with 8+ melodies each
+// containing dozens of note pairs, that would consume far more of the Nano's tiny 2 KB of SRAM than
+// this project can spare. PROGMEM instead keeps the data in flash (the much larger, 32 KB, storage
+// normally used only for program code), and the melody player (playToneSequence_P()/melodyReadAt()
+// in 30-lights-and-sounds.ino) reads each value on-the-fly with pgm_read_word() as it plays, rather
+// than copying the whole array into RAM first. "const" here also matters: it documents that this
+// data never changes at runtime, which is required for PROGMEM to work correctly - if the code
+// tried to write to a PROGMEM array, it would silently fail to update it (writes must go through
+// EEPROM instead, or a runtime CPU register, not flash reserved for compiled program code).
+
 // Somewhere global or static (C major snippet)
 const int16_t melodyDemo[] PROGMEM = {
   523, 200, 587, 200, 659, 200, 698, 200,  // C D E F (ms each)
