@@ -16,6 +16,8 @@
 - Create: `arduino-train-v2\docs-internal\TECHNICAL.md` — technical details removed from the README.
 - Modify: `arduino-train-v2\docs-internal\LEARN.md` — only if a link or title needs to be adjusted for the new README wording.
 
+Note: `docs-internal\` is currently ignored by git in this repository, so any new or restored files under that directory must be force-added with `git add -f`.
+
 ### Task 1: Draft the internal technical reference
 
 **Files:**
@@ -26,6 +28,7 @@
 - [ ] **Step 1: Collect the technical sections that no longer belong in the README**
 
   Read the current README and identify the sections that should move: sleep/warning/shutdown behavior, electrical and power notes, build and verification commands, color marker calibration, and any other implementation-specific notes.
+  If the working tree still has the guide at repo root, move it back to `arduino-train-v2\docs-internal\LEARN.md` before editing so the internal docs stay in one place.
 
 - [ ] **Step 2: Write the new internal technical file**
 
@@ -46,7 +49,7 @@
 - [ ] **Step 4: Commit the internal doc**
 
   ```powershell
-  git add -- arduino-train-v2/docs-internal/TECHNICAL.md
+  git add -f -- arduino-train-v2/docs-internal/TECHNICAL.md arduino-train-v2/docs-internal/LEARN.md
   git commit -m "Add train technical documentation
 
   Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -71,7 +74,7 @@
 
 - [ ] **Step 2: Remove technical detail from the public README**
 
-  Delete the sleep/warning/shutdown deep dive, electrical notes, build commands, and calibration instructions from the public README. Replace them with short links to the internal docs.
+  Delete the sleep/warning/shutdown deep dive, electrical notes, build commands, calibration instructions, project status, sketch layout, and more-details sections from the public README. Replace them with short links to the internal docs.
 
 - [ ] **Step 3: Tighten the tone for beginners**
 
@@ -86,7 +89,7 @@
 - [ ] **Step 5: Commit the README rewrite**
 
   ```powershell
-  git add -- arduino-train-v2/README.md arduino-train-v2/docs-internal/LEARN.md
+  git add -f -- arduino-train-v2/README.md arduino-train-v2/docs-internal/LEARN.md arduino-train-v2/docs-internal/TECHNICAL.md
   git commit -m "Simplify train README and link internal docs
 
   Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -126,7 +129,7 @@
 - [ ] **Step 5: Commit any final fixes**
 
   ```powershell
-  git add -- arduino-train-v2/README.md arduino-train-v2/docs-internal/TECHNICAL.md arduino-train-v2/docs-internal/LEARN.md
+  git add -f -- arduino-train-v2/README.md arduino-train-v2/docs-internal/TECHNICAL.md arduino-train-v2/docs-internal/LEARN.md
   git commit -m "Finalize train documentation split
 
   Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
