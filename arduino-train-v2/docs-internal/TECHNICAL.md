@@ -64,5 +64,5 @@ Replace only the generated-data region in `arduino-train-v2.ino`. The export map
 
 ## More details
 
-- Internal beginner guide: `docs-internal/LEARN.md`
+- Internal beginner guide: `LEARN.md`
 - Project status: the current hardware and software support the listed features, with motor overcurrent protection still planned as a future improvement.

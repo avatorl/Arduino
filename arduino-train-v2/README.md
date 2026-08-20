@@ -68,5 +68,4 @@ This project uses a 2S Li-ion battery pack, so take battery wiring and protectio
 
 ## Learn more
 
-- Beginner guide: `docs-internal/LEARN.md`
-- Technical reference: `docs-internal/TECHNICAL.md`
+- Beginner guide: `LEARN.md`
