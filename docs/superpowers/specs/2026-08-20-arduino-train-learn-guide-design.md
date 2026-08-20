@@ -2,11 +2,11 @@
 
 ## Goal
 
-Create `arduino-train-v2\LEARN.md`, a short beginner-friendly reference for the Arduino and C++ concepts that are actually used by the Arduino Train v2 sketch.
+Create `arduino-train-v2\docs-internal\LEARN.md`, a short beginner-friendly reference for the Arduino and C++ concepts that are actually used by the Arduino Train v2 sketch.
 
 ## Audience and scope
 
-The reader is comfortable following the train README but is still learning Arduino and C++. The guide will be project-linked rather than generic: explanations will point to real files and use small examples based on the sketch. It will explain concepts without reproducing large implementation sections or attempting to document every sensor register.
+The reader is comfortable following the train README but is still learning Arduino and C++. The guide is internal project documentation under `docs-internal`; it will be project-linked rather than generic, with explanations pointing to real files and using small examples based on the sketch. It will explain concepts without reproducing large implementation sections or attempting to document every sensor register.
 
 ## Content structure
 
