@@ -17,8 +17,11 @@ from the existing low-battery warning and permanent low-battery shutdown:
 
 - It latches on the first valid ADC conversion above
   `BATTERY_MAX_VALID_MV`; a reading of zero is not an overvoltage condition.
-- It is detected from every direct battery measurement, including stopped
-  battery guarding and the 250 ms loaded-voltage refresh used for motor PWM.
+- It is detected from every direct battery measurement, including the initial
+  `setup()` reading before normal outputs, melody, or IR are initialized; the
+  stopped battery guard; and the 250 ms loaded-voltage refresh used for motor
+  PWM. While stationary, the existing guard's 5-second measurement cadence is
+  retained; while driving, detection occurs on the loaded-voltage refresh.
 - On entry, it immediately cancels auto drive, jog, boost, siren, melodies,
   buzzer patterns, sensor mode, pending reversals, and idle-sleep behavior;
   then coasts and disables the DRV8833 through `pinMotorSleep`.
@@ -31,16 +34,25 @@ from the existing low-battery warning and permanent low-battery shutdown:
   rear red indicator must stay visibly lit. Only removing and restoring power
   clears the state.
 - It plays one distinctive, finite critical-error tone sequence when entering
-  the state, then remains silent. This avoids a continuous buzzer drain while
-  retaining an unmistakable audible alert.
+  the state, using the existing safety-bypass sound path, then remains silent.
+  This avoids a continuous buzzer drain while retaining an unmistakable
+  audible alert.
 - It appends one EEPROM overvoltage event when EEPROM logging is enabled,
   subject to the existing per-boot write budget. The stored voltage byte uses
   the existing invalid-reading sentinel because a value above 8.5 V cannot be
   represented as a valid 2S voltage.
 
-The state is checked early in `loop()` and before normal motor, automatic
-distance, idle, sensor, and IR behavior. It takes precedence over all other
-faults and visual modes.
+Represent the latch as a dedicated shared boolean rather than a new
+`BatteryState` value. This preserves the existing low-battery state machine
+and makes the priority explicit: `loop()` checks the latch before normal
+motor, automatic-distance, idle, sensor, and IR behavior; `translateIR()`
+returns immediately before its existing battery-state handling; and every
+output-restoration helper respects the latch. It takes precedence over all
+other faults and visual modes.
+
+The fault must not enter the existing `goToIdle()` path. Although the MCP23008
+can retain its rear-red output during AVR sleep, that path accepts an IR wake
+and restores normal operation, violating the power-cycle-only requirement.
 
 ## Power-Management Debugging
 
@@ -88,15 +100,19 @@ explicitly described will be traced and included before implementation.
 - `config.h`: rename the debug setting and add only the constants or event
   identifiers required for the overvoltage fault.
 - `arduino-train-v2.ino`: rename debug macros, add the indicator reference,
-  shared critical-state data, EEPROM event identifier, and loop precedence.
+  shared critical-state data, EEPROM event identifier, boot-time
+  overvoltage check before normal initialization, and loop precedence.
 - `50-power-management.ino`: centralize direct-reading validation,
   overvoltage transition handling, expanded power debug messages, and
   EEPROM-event labeling.
 - `30-lights-and-sounds.ino`: add the finite critical-alert pattern and an
   output helper that establishes the critical red-only state without being
-  overridden by normal indicator gates.
-- `10-ir-remote.ino` and `20-motor.ino`: only add guards necessary to reject
-  commands and motor-drive attempts while the critical latch is set.
+  overridden by normal indicator gates. Add the required power-debug line
+  immediately before `performPermanentShutdown()` enters permanent sleep.
+- `10-ir-remote.ino`: add the early critical-latch command guard and rename
+  its existing battery-test `DBG[_LN]_VOLTAGE_METER` calls.
+- `20-motor.ino`: add only guards necessary to prevent motor-drive attempts
+  while the critical latch is set.
 
 No unrelated refactoring or changes to existing low-battery thresholds are in
 scope.
