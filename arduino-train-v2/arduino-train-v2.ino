@@ -42,7 +42,7 @@
   //   Dir                               - Motor direction state.
 
   // ===============================================================================================
-  #define DEBUG_ANY (DEBUG_COLOR_SENSOR || DEBUG_DISTANCE_SENSOR || DEBUG_IR_REMOTE || DEBUG_TILT_SENSOR || DEBUG_VOLTAGE_METER || DEBUG_EEPROM || DEBUG_MOTOR || DEBUG_LEDS || DEBUG_SOUND)
+  #define DEBUG_ANY (DEBUG_COLOR_SENSOR || DEBUG_DISTANCE_SENSOR || DEBUG_IR_REMOTE || DEBUG_TILT_SENSOR || DEBUG_ACCELEROMETER || DEBUG_VOLTAGE_METER || DEBUG_EEPROM || DEBUG_MOTOR || DEBUG_LEDS || DEBUG_SOUND)
   // DEBUG_ANY is true (non-zero) if at least one of the per-module DEBUG_* flags from config.h is
   // turned on. It is used just below to decide whether Serial (the USB debug connection) needs to
   // be started at all; if every debug flag is off, the code that would set up Serial is skipped
@@ -139,6 +139,14 @@
   #else
   #define DBG_TILT_SENSOR(...)
   #define DBGLN_TILT_SENSOR(...)
+  #endif
+
+  #if DEBUG_ACCELEROMETER
+  #define DBG_ACCELEROMETER(...) Serial.print(__VA_ARGS__)
+  #define DBGLN_ACCELEROMETER(...) Serial.println(__VA_ARGS__)
+  #else
+  #define DBG_ACCELEROMETER(...)
+  #define DBGLN_ACCELEROMETER(...)
   #endif
 
   #if DEBUG_VOLTAGE_METER
@@ -312,6 +320,7 @@
   void updateGreenBlink();
   void updateMotorReverseCooldown();
   void initDistanceSensorHardware();
+  void updateAccelerometerSafety();
   bool startDistanceSensorRanging(bool reinitializeSensor = true);
   int getDistanceReading();
   uint8_t irReceive();
@@ -654,6 +663,8 @@
   unsigned long tiltEdgeAt = 0;
   unsigned long tiltQuietUntil = 0;
   bool tiltStopLatched = false;
+  bool accelerometerTiltStopLatched = false;
+  bool accelerometerCrashLatched = false;
 
   // ── Tone melody player state ────────────────────────────────────────────────
   const int MELODY_MAX_PAIRS = 64;        // up to 64 (freq,dur) pairs
@@ -821,6 +832,7 @@
     // Debounces the tilt switch so bumps do not cause false alarms. A confirmed tilt stops the
     // train, blocks new drive commands, and provides the user with a clear warning indication.
     updateTiltSensor();
+    updateAccelerometerSafety();
 
     // === 6. IR remote handler ===
     // Reads the newest NEC frame from the remote and maps it to train actions such as speed

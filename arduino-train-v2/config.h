@@ -65,6 +65,9 @@
 #ifndef DEBUG_TILT_SENSOR
 #define DEBUG_TILT_SENSOR 0
 #endif
+#ifndef DEBUG_ACCELEROMETER
+#define DEBUG_ACCELEROMETER 0
+#endif
 #ifndef DEBUG_VOLTAGE_METER
 #define DEBUG_VOLTAGE_METER 0
 #endif
@@ -96,6 +99,22 @@ constexpr int pinMotorFault = 8;
 constexpr int pinMotorSleep = 7;
 constexpr int pinColorSensorLED = 4;
 constexpr int pinBuzzer = 12;
+
+// MPU-6050 accelerometer sampling and safety thresholds.
+constexpr uint8_t mpu6050Address = 0x68;
+constexpr unsigned long mpu6050ReadEveryMs = 20UL;
+constexpr uint8_t mpu6050AccelConfig = 0x00;       // +/-2 g
+constexpr int16_t mpu6050AccelLsbPerG = 16384;     // +/-2 g scale
+// Keep the degree labels and tangent-squared ratios together: ratios avoid runtime floating-point trigonometry.
+constexpr uint16_t mpu6050TiltTriggerDegrees = 45;
+constexpr uint16_t mpu6050TiltTriggerTanSquaredPermille = 1000;  // tan(45)^2
+constexpr uint16_t mpu6050TiltRecoveryDegrees = 30;
+constexpr uint16_t mpu6050TiltRecoveryTanSquaredPermille = 333;  // tan(30)^2
+constexpr int16_t mpu6050CrashDeltaMg = 600;
+// Confirm these signs from DEBUG_ACCELEROMETER output after physical installation.
+constexpr int8_t mpu6050ForwardAxis = 0;      // 0 = X, 1 = Y
+constexpr int8_t mpu6050ForwardAxisSign = 1;  // +1 or -1
+constexpr int8_t mpu6050UprightZSign = 1;     // +1 or -1
 
 // --- Shared motor and auto-drive settings ---
 constexpr unsigned long BOOST_DURATION_MS = 10000UL;
