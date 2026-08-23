@@ -18,8 +18,9 @@ Add debug-only startup output in `arduino-train-v2/40-sensors.ino` that:
 
 Compile the diagnostic helpers and their calls only when
 `DEBUG_DISTANCE_SENSOR == 1`. The helpers use `Wire` probes and a direct
-read of VL53L0X register `0xC0`; they do not write registers, alter XSHUT
-timing, or change the normal initialization order.
+read of VL53L0X register `0xC0`; the read sets only the device's register
+pointer and does not alter configuration, XSHUT timing, or initialization
+order.
 
 Diagnostics run at the existing sensor-startup checkpoints:
 
