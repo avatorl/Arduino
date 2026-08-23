@@ -23,7 +23,7 @@ try {
   try {
     $serialPort.Open()
   } catch {
-    throw [System.IO.IOException]::new("Failed to open requested serial port '$Port'.", $_.Exception)
+    throw [System.IO.IOException]::new("Failed to open requested serial port '$Port': $($_.Exception.Message)", $_.Exception)
   }
 
   $serialPort.DiscardInBuffer()
