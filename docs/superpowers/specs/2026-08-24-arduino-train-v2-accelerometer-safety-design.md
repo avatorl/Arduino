@@ -32,7 +32,8 @@ The code calculates chassis tilt from the gravity vector rather than from a
 boot-time baseline. It therefore measures against real gravity even when the
 train starts on an incline.
 
-At or above 45 degrees, a separate accelerometer tilt latch performs the
+At or above 45 degrees continuously for the existing `TILT_STABLE_MS` (1000
+ms) debounce interval, a separate accelerometer tilt latch performs the
 current tilt action: stop and reset the motor selection, leave auto mode,
 cancel jog, show red, and play the tilt warning. It blocks IR motor-control
 commands while active. It clears only below 30 degrees. The existing
@@ -73,8 +74,9 @@ SW-520D behavior, or silently substitute fabricated acceleration data.
 
 - Build the sketch with `DEBUG_ACCELEROMETER` enabled and disabled.
 - Verify an absent MPU-6050 leaves normal SW-520D and motor behavior intact.
-- With the module mounted flat, verify a sustained 45-degree tilt stops the
-  motor and that reducing below 30 degrees clears only the accelerometer latch.
+- With the module mounted flat, verify a 45-degree tilt held for
+  `TILT_STABLE_MS` stops the motor and that reducing below 30 degrees clears
+  only the accelerometer latch.
 - Verify the SW-520D still latches and clears exactly as before.
 - Tune and verify the forward-axis configuration with debug data, then produce
   a controlled sudden-stop event while driving to confirm the crash siren and
