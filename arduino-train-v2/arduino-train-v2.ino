@@ -678,6 +678,9 @@
     #if DEBUG_ANY
     delay(1000);  // Let the serial monitor attach after the Nano auto-resets on port open.
     #endif
+    #if DEBUG_ANY
+    Serial.println(F("=== TRAIN STARTUP ==="));
+    #endif
     #if defined(__AVR__)
     // The watchdog timer (WDT) is a hardware countdown timer independent of the main program. If
     // the countdown reaches zero without being reset, the chip assumes the code has hung/crashed
