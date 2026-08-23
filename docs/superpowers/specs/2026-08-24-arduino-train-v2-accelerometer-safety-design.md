@@ -23,8 +23,10 @@ default +/-2 g accelerometer scale, and reads six accelerometer bytes every
 disabled for that boot; existing train behavior remains unchanged.
 
 `config.h` will define the I2C address, read cadence, acceleration scale,
-tilt thresholds, crash threshold, and signed forward-axis mapping. The
-forward axis is configurable because the module has not yet been mounted.
+tilt thresholds, crash threshold, signed forward-axis mapping, and the
+expected sign of the Z axis while the module is level and label-side up. The
+forward axis and Z sign are configurable because the module has not yet been
+mounted.
 
 ### Tilt safety
 
@@ -41,9 +43,10 @@ commands while active. It clears only below 30 degrees. The existing
 blocked while either tilt latch is set.
 
 The 45/30-degree comparisons use squared raw acceleration components, avoiding
-floating-point trigonometry on the AVR. The calculation assumes the module is
-mounted flat relative to the chassis; a fully inverted chassis remains a tilt
-fault.
+floating-point trigonometry on the AVR. The configured upright Z sign
+distinguishes a level chassis from an inverted one. The calculation assumes
+the module is mounted flat relative to the chassis; a fully inverted chassis
+remains a tilt fault.
 
 ### Crash safety
 
@@ -67,8 +70,12 @@ tilt state changes, and crash decisions. Periodic output is rate limited.
 ## Error Handling
 
 MPU initialization and read failures must be explicitly logged when its debug
-category is enabled. They must not latch a fault, stop the train, change the
-SW-520D behavior, or silently substitute fabricated acceleration data.
+category is enabled. An initialization failure performs no new safety action.
+A runtime read failure disables further MPU sampling for the boot and does not
+create a new latch or stop. If an accelerometer tilt latch was already active,
+it remains active rather than clearing safety state from an invalid reading.
+Failures must not change SW-520D behavior or silently substitute fabricated
+acceleration data.
 
 ## Validation
 
