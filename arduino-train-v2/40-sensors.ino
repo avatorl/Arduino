@@ -546,6 +546,8 @@
   unsigned long accelerometerTiltStartedMs = 0;
   bool accelerometerTiltTiming = false;
   unsigned long lastAccelerometerDebugMs = 0;
+  bool accelerometerPreviousForwardSampleValid = false;
+  int32_t accelerometerPreviousForwardRaw = 0;
 
   // TCS34725 Low-Power Sleep / Power-Down Notes:
   // - The sensor IC has an internal sleep/power-down state (~1-2 uA) controlled via I2C.
@@ -1033,6 +1035,45 @@
       DBG_ACCELEROMETER(rawY);
       DBG_ACCELEROMETER(F("/"));
       DBGLN_ACCELEROMETER(rawZ);
+    }
+
+    if (Speed == 0 || accelerometerCrashLatched) {
+      accelerometerPreviousForwardSampleValid = false;
+    } else if (MotorDirection == 1 || MotorDirection == 2) {
+      const int32_t selectedAxisRaw =
+        mpu6050ForwardAxis == 0 ? rawX : rawY;
+      const int32_t signedForwardRaw =
+        (int32_t)selectedAxisRaw * mpu6050ForwardAxisSign;
+      const int32_t crashThresholdRaw =
+        ((int32_t)mpu6050CrashDeltaMg * mpu6050AccelLsbPerG) / 1000L;
+
+      if (accelerometerPreviousForwardSampleValid) {
+        const int32_t deltaRaw =
+          signedForwardRaw - accelerometerPreviousForwardRaw;
+        const bool crash = MotorDirection == 1
+          ? deltaRaw <= -crashThresholdRaw
+          : deltaRaw >= crashThresholdRaw;
+
+        if (crash) {
+          accelerometerCrashLatched = true;
+          stopAndResetStepSelection();
+          exitAutoDistanceMode(false);
+          cancelJog();
+          SetRGBColor(RgbColor::Red);
+          sirenActive = true;
+          sirenTimer = millis();
+          sirenStartMs = sirenTimer;
+          DBG_ACCELEROMETER(F("MPU-6050 crash: delta="));
+          DBG_ACCELEROMETER(deltaRaw);
+          DBG_ACCELEROMETER(F(", threshold="));
+          DBGLN_ACCELEROMETER(crashThresholdRaw);
+        }
+      }
+
+      accelerometerPreviousForwardRaw = signedForwardRaw;
+      accelerometerPreviousForwardSampleValid = !accelerometerCrashLatched;
+    } else {
+      accelerometerPreviousForwardSampleValid = false;
     }
 
     if (triggerTilt) {

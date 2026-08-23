@@ -218,7 +218,13 @@
       return;
     }
 
-    if (tiltStopLatched && isMotorControlCommand(code)) {
+    if (accelerometerCrashLatched && isMotorControlCommand(code)) {
+      accelerometerCrashLatched = false;
+      sirenActive = false;
+      noTone(pinBuzzer);
+    }
+
+    if ((tiltStopLatched || accelerometerTiltStopLatched) && isMotorControlCommand(code)) {
       if (!lastWasRepeat) {
         DBGLN_TILT_SENSOR(F("Ignored: tilt lockout active"));
         // Denial cue: bypass the battery-restriction sound gate so the user still hears it.
