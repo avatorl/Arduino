@@ -126,6 +126,63 @@
     }
   };
 
+  struct TrainAccelerometerMPU6050 {
+    static const uint8_t RegisterWhoAmI = 0x75;
+    static const uint8_t RegisterPowerManagement1 = 0x6B;
+    static const uint8_t RegisterAccelConfig = 0x1C;
+    static const uint8_t RegisterAccelXoutHigh = 0x3B;
+
+    uint8_t address = mpu6050Address;
+
+    bool begin_I2C() {
+      Wire.begin();
+      address = mpu6050Address;
+
+      uint8_t whoAmI = 0;
+      if (!readRegister(RegisterWhoAmI, &whoAmI)) return false;
+      if (whoAmI != 0x68 && whoAmI != 0x69) return false;
+      if (!writeRegister(RegisterPowerManagement1, 0x00)) return false;
+      return writeRegister(RegisterAccelConfig, mpu6050AccelConfig);
+    }
+
+    bool readAcceleration(int16_t* x, int16_t* y, int16_t* z) {
+      uint8_t bytes[6] = { 0 };
+      if (!readRegisters(RegisterAccelXoutHigh, bytes, sizeof(bytes))) return false;
+
+      const uint16_t rawX = ((uint16_t)bytes[0] << 8) | bytes[1];
+      const uint16_t rawY = ((uint16_t)bytes[2] << 8) | bytes[3];
+      const uint16_t rawZ = ((uint16_t)bytes[4] << 8) | bytes[5];
+      *x = (int16_t)rawX;
+      *y = (int16_t)rawY;
+      *z = (int16_t)rawZ;
+      return true;
+    }
+
+   private:
+    bool writeRegister(uint8_t reg, uint8_t value) {
+      Wire.beginTransmission(address);
+      Wire.write(reg);
+      Wire.write(value);
+      return Wire.endTransmission() == 0;
+    }
+
+    bool readRegister(uint8_t reg, uint8_t* value) {
+      return readRegisters(reg, value, 1);
+    }
+
+    bool readRegisters(uint8_t startReg, uint8_t* buffer, uint8_t length) {
+      Wire.beginTransmission(address);
+      Wire.write(startReg);
+      if (Wire.endTransmission(false) != 0) return false;
+
+      if (Wire.requestFrom((int)address, (int)length) != length) return false;
+      for (uint8_t i = 0; i < length; ++i) {
+        buffer[i] = (uint8_t)Wire.read();
+      }
+      return true;
+    }
+  };
+
   // VL53L0X distance-sensor helper.
   // Like the TCS34725 helper above, this is a hand-written register-level driver for the VL53L0X
   // time-of-flight distance sensor, instead of using a ready-made library such as Pololu's
@@ -483,6 +540,12 @@
   // D4 is dedicated to the TCS34725 breakout LED control input in this revision.
   TrainColorSensorTCS34725 colorSensor;
   bool colorSensorDetected = false;
+  TrainAccelerometerMPU6050 accelerometer;
+  bool accelerometerDetected = false;
+  unsigned long lastAccelerometerReadMs = 0;
+  unsigned long accelerometerTiltStartedMs = 0;
+  bool accelerometerTiltTiming = false;
+  unsigned long lastAccelerometerDebugMs = 0;
 
   // TCS34725 Low-Power Sleep / Power-Down Notes:
   // - The sensor IC has an internal sleep/power-down state (~1-2 uA) controlled via I2C.
@@ -552,6 +615,12 @@
   // Sensor-wide hardware setup groups tilt pin setup, distance reset, and color-sensor startup.
   void initSensorHardware() {
     pinMode(pinTiltSensor, INPUT_PULLUP);
+    accelerometerDetected = accelerometer.begin_I2C();
+    if (accelerometerDetected) {
+      DBGLN_ACCELEROMETER(F("MPU-6050 ready"));
+    } else {
+      DBGLN_ACCELEROMETER(F("MPU-6050 not detected; accelerometer safety disabled"));
+    }
     initDistanceSensorHardware();
     initColorSensorHardware();
   }
@@ -927,6 +996,75 @@
   // ================================================================================================
   // Tilt sensor
   // ================================================================================================
+  void updateAccelerometerSafety() {
+    const unsigned long now = millis();
+    if (!accelerometerDetected || (now - lastAccelerometerReadMs) < mpu6050ReadEveryMs) return;
+    lastAccelerometerReadMs = now;
+
+    int16_t sampleX = 0;
+    int16_t sampleY = 0;
+    int16_t sampleZ = 0;
+    if (!accelerometer.readAcceleration(&sampleX, &sampleY, &sampleZ)) {
+      accelerometerDetected = false;
+      accelerometerTiltTiming = false;
+      DBGLN_ACCELEROMETER(F("MPU-6050 read failed; accelerometer safety disabled"));
+      return;
+    }
+
+    const int32_t rawX = sampleX;
+    const int32_t rawY = sampleY;
+    const int32_t rawZ = sampleZ;
+    const int32_t uprightZ = (int32_t)rawZ * mpu6050UprightZSign;
+    const int64_t horizontalSquared =
+      (int64_t)rawX * rawX + (int64_t)rawY * rawY;
+    const int64_t uprightZSquared = (int64_t)uprightZ * uprightZ;
+    const bool triggerTilt = uprightZ <= 0 ||
+      horizontalSquared * 1000LL >=
+        uprightZSquared * mpu6050TiltTriggerTanSquaredPermille;
+    const bool recovered = uprightZ > 0 &&
+      horizontalSquared * 1000LL <
+        uprightZSquared * mpu6050TiltRecoveryTanSquaredPermille;
+
+    if ((now - lastAccelerometerDebugMs) >= 1000UL) {
+      lastAccelerometerDebugMs = now;
+      DBG_ACCELEROMETER(F("MPU-6050 raw X/Y/Z: "));
+      DBG_ACCELEROMETER(rawX);
+      DBG_ACCELEROMETER(F("/"));
+      DBG_ACCELEROMETER(rawY);
+      DBG_ACCELEROMETER(F("/"));
+      DBGLN_ACCELEROMETER(rawZ);
+    }
+
+    if (triggerTilt) {
+      if (!accelerometerTiltStopLatched) {
+        if (!accelerometerTiltTiming) {
+          accelerometerTiltTiming = true;
+          accelerometerTiltStartedMs = now;
+        } else if ((now - accelerometerTiltStartedMs) >= TILT_STABLE_MS) {
+          stopAndResetStepSelection();
+          exitAutoDistanceMode(false);
+          cancelJog();
+          accelerometerTiltStopLatched = true;
+          sirenActive = false;
+          stopMelody();
+          noTone(pinBuzzer);
+          SetRGBColor(RgbColor::Red);
+          playPattern(pattern_tiltBeep, true);
+          DBGLN_ACCELEROMETER(F("MPU-6050 tilt: ACTIVE -> emergency stop"));
+        }
+      }
+    } else if (recovered) {
+      accelerometerTiltTiming = false;
+      if (accelerometerTiltStopLatched) {
+        accelerometerTiltStopLatched = false;
+        refreshDriveLights();
+        DBGLN_ACCELEROMETER(F("MPU-6050 tilt: IDLE -> clear latch, restore LEDs"));
+      }
+    } else {
+      accelerometerTiltTiming = false;
+    }
+  }
+
   // Debounce tilt input and latch emergency stop.
   // "Debouncing" means waiting for a signal to settle before trusting it: a mechanical tilt switch
   // can flicker rapidly between HIGH/LOW for a few milliseconds while it's physically moving, so
@@ -971,4 +1109,5 @@
         refreshDriveLights();
       }
     }
+    updateAccelerometerSafety();
   }
