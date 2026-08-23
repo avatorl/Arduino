@@ -20,15 +20,20 @@ baud through .NET's `System.IO.Ports.SerialPort`.
 
 The script will:
 
-1. open the port with DTR and RTS enabled, which preserves the existing
-   Nano auto-reset behavior;
-2. wait longer than the sketch's 1000 ms debug attachment delay;
-3. discard every input byte accumulated during the reset window;
-4. display only bytes received after that discard until Ctrl+C closes the
+1. open the port with DTR and RTS disabled, discard any buffered bytes, then
+   enable DTR to trigger the Nano's existing auto-reset behavior;
+2. wait 250 ms, the default pre-reset drain period, and discard every input
+   byte accumulated during that period;
+3. display bytes received after that discard until Ctrl+C closes the
    port.
 
-The port, baud rate, and reset-settle duration will be script parameters with
-the current hardware defaults. Failure to open the port will report the
+The reset reaches the bootloader before the 250 ms drain period ends, while
+the sketch's existing 1000 ms debug attachment delay keeps the delimiter from
+being sent until well after live display begins. Therefore the delimiter is
+retained rather than discarded.
+
+The port, baud rate, and pre-reset drain duration will be script parameters
+with the current hardware defaults. Failure to open the port will report the
 underlying error and return a non-zero exit code.
 
 ### Firmware delimiter
