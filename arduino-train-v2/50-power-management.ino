@@ -197,7 +197,7 @@
 
   // Append one runtime battery-related event to the EEPROM event ring buffer.
   // This writes into another ring buffer (see the "ring buffer"/wraparound explanation on
-  // pushDistanceSampleAndGetMedian() in 40-sensors.ino for the general idea), except here the wrap
+  // pushDistanceSampleAndGetMedian() in 42-distance-sensor.ino for the general idea), except here the wrap
   // is done with the modulo operator "%" directly on the head index instead of an "if" check.
   // EEPROM.update(addr, value) is used instead of EEPROM.write(addr, value) because it first checks
   // whether the byte already holds that value and skips the write if so - EEPROM cells wear out

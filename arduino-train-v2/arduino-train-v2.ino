@@ -19,13 +19,17 @@
   // File description
   // ===============================================================================================
   // Main sketch file for Arduino DUPLO Train v2.
-  // This file keeps the shared types, shared state, low-level helper classes, setup(), and loop().
+  // This file keeps the shared types, shared state, low-level helper classes, the mechanical tilt
+  // switch handler, setup(), and loop().
   // Feature-specific function bodies are grouped into:
   //   - 10-ir-remote.ino
   //   - 20-motor.ino
   //   - 30-lights-and-sounds.ino
-  //   - 40-sensors.ino
+  //   - 41-color-sensor.ino
+  //   - 42-distance-sensor.ino
+  //   - 43-accelerometer.ino
   //   - 50-power-management.ino
+  //   - 90-legacy-vl53l0x.ino (retired VL53L0X driver, excluded from the build by default)
 
   // ===============================================================================================
   // Sketch Contents / Structure Guide
@@ -302,6 +306,7 @@
   void updateGreenBlink();
   void updateMotorReverseCooldown();
   void initDistanceSensorHardware();
+  void initAccelerometerHardware();
   void updateAccelerometerSafety();
   bool startDistanceSensorRanging(bool reinitializeSensor = true);
   int getDistanceReading();
@@ -340,7 +345,8 @@
   const __FlashStringHelper* trackMarkerLabel(uint8_t markerClass);
   #endif
 
-  // Sensor-owned shared state is defined in 40-sensors.ino and declared here so other modules can use it.
+  // Sensor-owned shared state is defined in 41-color-sensor.ino / 42-distance-sensor.ino and
+  // declared here so other modules can use it.
   extern bool colorSensorDetected;
   extern uint8_t Distance;
   extern bool distanceTofDetected;
@@ -834,4 +840,63 @@
     updateGreenBlink();
     updateMotorReverseCooldown();
 
+  }
+
+  // ================================================================================================
+  // Tilt sensor
+  // ================================================================================================
+  // Sensor-wide hardware setup groups tilt pin setup, accelerometer probing, distance-sensor reset,
+  // and color-sensor startup. The individual sensor drivers live in 41-color-sensor.ino,
+  // 42-distance-sensor.ino, and 43-accelerometer.ino.
+  void initSensorHardware() {
+    pinMode(pinTiltSensor, INPUT_PULLUP);
+    initAccelerometerHardware();
+    initDistanceSensorHardware();
+    initColorSensorHardware();
+  }
+
+  // Debounce tilt input and latch emergency stop.
+  // "Debouncing" means waiting for a signal to settle before trusting it: a mechanical tilt switch
+  // can flicker rapidly between HIGH/LOW for a few milliseconds while it's physically moving, so
+  // reacting to every raw reading would cause false triggers. This function tracks the last raw
+  // reading (tiltLastRead) and when it changes (tiltEdgeAt), then only accepts it as a real,
+  // "stable" state change once it has held steady for TILT_STABLE_MS - and then enforces a further
+  // "quiet period" (tiltQuietUntil) afterward before it will consider yet another change, to avoid
+  // rapid re-triggering right at the edge of stability.
+  // This alarm bypasses the battery-restriction sound gate (bypassBatteryGate = true), the same way
+  // the denial beeps elsewhere in this project do: a physical tip-over is a safety event and must
+  // stay audible even during battery Warning/Shutdown restrictions.
+  void updateTiltSensor() {
+    unsigned long now = millis();
+    int reading = digitalRead(pinTiltSensor);
+
+    if (reading != tiltLastRead) {
+      tiltLastRead = reading;
+      tiltEdgeAt = now;
+    }
+
+    if ((long)(now - tiltQuietUntil) >= 0 && reading != tiltStableState && (now - tiltEdgeAt) >= TILT_STABLE_MS) {
+
+      tiltStableState = reading;
+      tiltQuietUntil = now + TILT_QUIET_MS;
+
+      if (tiltStableState == HIGH) {
+        DBGLN_TILT_SENSOR(F("TILT: ACTIVE -> emergency stop"));
+        if (!tiltStopLatched) {
+          stopAndResetStepSelection();
+          exitAutoDistanceMode(false);  // optional: exit AUTO
+          tiltStopLatched = true;
+        }
+        sirenActive = false;   // silence siren first so the tilt beep is audible
+        stopMelody();
+        noTone(pinBuzzer);
+        SetRGBColor(RgbColor::Red);
+        // Bypass the battery-restriction sound gate: this is a safety alarm, not a user sound.
+        playPattern(pattern_tiltBeep, true);
+      } else {
+        DBGLN_TILT_SENSOR(F("TILT: IDLE -> clear latch, restore LEDs"));
+        tiltStopLatched = false;
+        refreshDriveLights();
+      }
+    }
   }

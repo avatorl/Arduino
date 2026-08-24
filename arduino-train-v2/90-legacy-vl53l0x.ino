@@ -4,13 +4,13 @@
 // Retired VL53L0X distance-sensor driver, kept for reference only.
 //
 // The train now uses a VL53L1X time-of-flight sensor, driven by TrainDistanceSensorVL53L1X in
-// 40-sensors.ino. The two chips are not protocol compatible: the VL53L0X uses 8-bit register
+// 42-distance-sensor.ino. The two chips are not protocol compatible: the VL53L0X uses 8-bit register
 // addresses while the VL53L1X uses 16-bit ones, so this driver cannot talk to the new hardware.
 //
 // This tab is excluded from compilation by ENABLE_VL53L0X_LEGACY_DRIVER in config.h. While that
 // switch is 0 the preprocessor strips everything below, so this file costs zero flash and zero
 // SRAM. Turning it back on only makes the struct compile again; nothing references it, and the
-// call sites in 40-sensors.ino would still have to be reconnected by hand.
+// call sites in 42-distance-sensor.ino would still have to be reconnected by hand.
 
 #include "config.h"
 #if ENABLE_VL53L0X_LEGACY_DRIVER
