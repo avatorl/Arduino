@@ -38,7 +38,7 @@ This project was rewritten from scratch and extends the original idea with more 
 
 ### Sensors
 
-- VL53L0X distance sensor
+- VL53L1X distance sensor
 - SW-520D tilt sensor
 - TCS34725 color sensor
 
@@ -57,7 +57,7 @@ This project was rewritten from scratch and extends the original idea with more 
 
 You can build a simpler version if you do not need every feature.
 
-- No `VL53L0X` = no obstacle-aware auto driving
+- No `VL53L1X` = no obstacle-aware auto driving
 - No `TCS34725` = no color-marker actions
 - No `SW-520D` = no tilt stop
 - No `MCP23008` = a different LED-driving approach is needed

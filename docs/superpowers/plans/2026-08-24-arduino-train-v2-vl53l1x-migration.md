@@ -132,9 +132,30 @@ git commit -m "Rename ToF config symbols and add VL53L1X cone settings"
 
 ---
 
+### Tasks 2-7 execution note (revised after plan review)
+
+The original split compiled a broken tree at several commit points, because `distanceTof`'s declared
+type would have referred to a struct that no longer existed. Tasks 2 through 7 are therefore executed
+as **one atomic change**: move the old struct to the legacy tab, add the new struct, and repoint the
+instance and startup path together, then compile once.
+
+Two further corrections from review apply throughout:
+
+- The struct needs an explicit `public:` after the initial members, otherwise `setAddress`,
+  `waitForBoot`, `init`, `setMeasurementTimingBudget`, `setRoi`, `startContinuous`,
+  `readRangeContinuousMillimeters`, and the debug helpers all end up private and no call site
+  compiles.
+- `logI2cAddress()`, `probeAddress()`, and `printHexByte()` live in the old struct and must be
+  ported to the new one, or the `DEBUG_DISTANCE_SENSOR=1` build fails.
+- `init()` must temporarily raise `ioTimeoutMs`. Its one-off calibration ranges using the default
+  block's long-mode ~100 ms budget, so the normal 50 ms `distanceTofTimeoutMs` would abort a
+  perfectly healthy sensor.
+
+---
+
 ### Task 2: Move the VL53L0X driver to a guarded legacy tab
 
-Done before writing the new driver so the two never coexist in the live build.
+Executed together with Tasks 3-7 as described above.
 
 **Files:**
 - Create: `arduino-train-v2/90-legacy-vl53l0x.ino`
@@ -349,16 +370,21 @@ undocumented magic values.
 
 ```cpp
   const uint8_t kVl53l1xDefaultConfig[] PROGMEM = {
-    0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x02, 0x08, 0x00, 0x08, 0x10, 0x01,
+    0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x02, 0x08, 0x00, 0x08, 0x10, 0x01,
     0x01, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x20, 0x0B, 0x00, 0x00, 0x02, 0x0A, 0x21, 0x00, 0x00, 0x05, 0x00,
     0x00, 0x00, 0x00, 0xC8, 0x00, 0x00, 0x38, 0xFF, 0x01, 0x00, 0x08, 0x00,
-    0x00, 0x01, 0xDB, 0x0F, 0x01, 0xF1, 0x0D, 0x01, 0x68, 0x00, 0x80, 0x08,
+    0x00, 0x01, 0xCC, 0x0F, 0x01, 0xF1, 0x0D, 0x01, 0x68, 0x00, 0x80, 0x08,
     0xB8, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x89, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x01, 0x0F, 0x0D, 0x0E, 0x0E, 0x00, 0x00, 0x02, 0xC7, 0xFF,
     0x9B, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00
   };
 ```
+
+Index 1 (register `0x002E`) is `0x01`, not `0x00`: that bit selects AVDD pull-ups, which is what
+enables 2.8 V I/O and is why `init()` can ignore its `io2v8` argument.
+Index 50 (register `0x005F`) is `0xCC`, completing the block's default long-mode `0x01CC` timing
+budget at `0x005E`/`0x005F`.
 
 - [ ] **Step 2: Add `init()`**
 
@@ -428,17 +454,20 @@ failing, so a mistyped `config.h` cannot disable the sensor. Values are the shor
     bool setMeasurementTimingBudget(uint32_t budgetUs) {
       const uint16_t ms = (uint16_t)(budgetUs / 1000UL);
       uint16_t a, b;
-      if (ms < 18)       { a = 0x001D; b = 0x0027; }
-      else if (ms < 27)  { a = 0x0051; b = 0x006E; }
-      else if (ms < 42)  { a = 0x00D6; b = 0x01CC; }
-      else if (ms < 75)  { a = 0x01AE; b = 0x01F9; }
-      else if (ms < 150) { a = 0x02E1; b = 0x02E8; }
-      else if (ms < 350) { a = 0x03E1; b = 0x0388; }
-      else               { a = 0x0591; b = 0x055D; }
+      if (ms < 18)       { a = 0x001D; b = 0x0027; }  // 15 ms
+      else if (ms < 27)  { a = 0x0051; b = 0x006E; }  // 20 ms
+      else if (ms < 42)  { a = 0x00D6; b = 0x006E; }  // 33 ms
+      else if (ms < 75)  { a = 0x01AE; b = 0x01E8; }  // 50 ms
+      else if (ms < 150) { a = 0x02E1; b = 0x0388; }  // 100 ms
+      else if (ms < 350) { a = 0x03E1; b = 0x0496; }  // 200 ms
+      else               { a = 0x0591; b = 0x05C1; }  // 500 ms
       if (!writeReg16(0x005E, a)) return false;
       return writeReg16(0x0061, b);
     }
 ```
+
+These are the **short-mode** pairs. The configured 33000 us selects `0x00D6`/`0x006E`; note the B
+value is shared with the 20 ms entry, which is correct and not a copy-paste slip.
 
 - [ ] **Step 2: Add the ROI**
 

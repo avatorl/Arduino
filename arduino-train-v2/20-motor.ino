@@ -4,17 +4,7 @@
   // Motor-driving and auto-distance speed control live here.
   // These settings mainly affect how the train accelerates, brakes, and reverses.
 
-  // --- Motor and driving settings ---
-  constexpr unsigned long DIR_DELAY = 1000UL;
-
-  // --- Auto-distance settings ---
-  constexpr int AUTO_DISTANCE_STOP = 8;
-  constexpr int AUTO_DISTANCE_RESTART = 11;
-  constexpr int AUTO_DISTANCE_MAX_SPEED = 50;
   constexpr int AUTO_DISTANCE_INVALID = -1;
-
-  static_assert(AUTO_DISTANCE_STOP < AUTO_DISTANCE_RESTART, "AUTO_DISTANCE_STOP must be below AUTO_DISTANCE_RESTART.");
-  static_assert(AUTO_DISTANCE_RESTART < AUTO_DISTANCE_MAX_SPEED, "AUTO_DISTANCE_RESTART must be below AUTO_DISTANCE_MAX_SPEED.");
 
   // Map obstacle distance to a target motor voltage for auto-distance mode.
   // This function turns a distance reading into a target voltage using simple linear interpolation
@@ -73,7 +63,7 @@
       case 1: return F("1");
       case 2: return F("2");
       case 3: return F("3");
-      case BOOST_SPEED_STEP: return F("4 (boost)");
+      case BOOST_SPEED_STEP: return F("4 (BOOST)");
       default: return F("unknown");
     }
   }
@@ -248,8 +238,6 @@
     updateMotorSpeed(targetSpeed);
   }
 
-  const int rampStep = 5;
-  const unsigned long rampDelay = 80;
   static unsigned long lastRamp = 0;
 
   // Smooth large speed changes so auto mode does not jerk the drivetrain.
@@ -324,7 +312,15 @@
 
   // Re-enable the driver after a cleared fault.
   bool rearmMotorDriver() {
-    digitalWrite(pinVL53L0X_XSHUT, HIGH); // Wake up VL53L0X
+    if (criticalOvervoltageLatched) {
+      analogWrite(pinMotor_IN1, 0);
+      analogWrite(pinMotor_IN2, 0);
+      digitalWrite(pinMotorSleep, LOW);
+      applyCriticalOvervoltageOutputs();
+      return false;
+    }
+
+    digitalWrite(pinVL53L1X_XSHUT, HIGH); // Wake up VL53L1X
     delay(10); // boot time
     startDistanceSensorRanging();
 
@@ -355,6 +351,14 @@
   // IN2 must never both be driven HIGH/PWM at the same time, so the code always sets one of them to
   // exactly 0.
   void setMotor(Dir dir, int speed) {
+    if (criticalOvervoltageLatched) {
+      analogWrite(pinMotor_IN1, 0);
+      analogWrite(pinMotor_IN2, 0);
+      digitalWrite(pinMotorSleep, LOW);
+      applyCriticalOvervoltageOutputs();
+      return;
+    }
+
     int safeSpeed = constrain(speed, 0, 255);
     switch (dir) {
       case Dir::Forward:
@@ -469,6 +473,14 @@
   // last-selected manual step, and MotorDirection/Speed are intentionally left untouched since the
   // jog is momentary and should not persist once the button is released.
   void JogDrive(Dir dir) {
+    if (criticalOvervoltageLatched) {
+      analogWrite(pinMotor_IN1, 0);
+      analogWrite(pinMotor_IN2, 0);
+      digitalWrite(pinMotorSleep, LOW);
+      applyCriticalOvervoltageOutputs();
+      return;
+    }
+
     int jogPWM = pwmSteps[1];
     if (dir == Dir::Forward) {
       analogWrite(pinMotor_IN1, jogPWM);

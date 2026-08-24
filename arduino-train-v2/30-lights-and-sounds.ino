@@ -6,7 +6,7 @@
 
   // Initialize the MCP23008 outputs used for all train lights.
   void initTrainLedHardware() {
-    trainLedExpanderDetected = trainLedExpander.begin_I2C(mcpAddressTrainLeds);
+    trainLedExpanderDetected = trainLedExpander.begin_I2C(mcp23008Address);
     if (!trainLedExpanderDetected) {
       DBGLN_LEDS(F("MCP23008 not found; train LEDs expect the expander wiring"));
       return;
@@ -208,9 +208,18 @@
     writeTrainOutput(ledRearRed, enabled);
   }
 
+  void applyCriticalOvervoltageOutputs() {
+    writeRGBPins(led1R, led1G, led1B, false, false, false);
+    writeRGBPins(led2R, led2G, led2B, false, false, false);
+    writeTrainOutput(ledGreen, false);
+    digitalWrite(pinColorSensorLED, colorSensorLEDOffLevel);
+    SetRearRedLight(true);
+  }
+
   // Apply raw RGB channel states to one headlight or both.
   // Apply raw RGB values to one or both headlights.
   void SetRGBLight(bool R, bool G, bool B, int led) {
+    if (criticalOvervoltageLatched) return;
     if (FrontLightOnOff == 0) return;
     if (!areRgbLightsAllowed()) {
       R = false;
@@ -255,6 +264,7 @@
 
   // Control the green status LED.
   void SetGreenLightValue(int Value) {
+    if (criticalOvervoltageLatched) return;
     // analogWrite(pinLEDGreen, Value);
     // The green status LED is driven through the expander-backed output stage.
     if (!isGreenIndicatorAllowed()) Value = 0;
@@ -263,6 +273,7 @@
 
   // Restore status lights from the current drive state.
   void refreshDriveLights() {
+    if (criticalOvervoltageLatched) return;
     if (!areRgbLightsAllowed()) {
       SetRGBLightColor(RgbColor::Off);
       SetGreenLightValue(0);
@@ -317,6 +328,7 @@
 
   // Force the train into its final no-recovery sleep state after shutdown.
   void performPermanentShutdown() {
+    DBGLN_POWER_MANAGEMENT(F("Permanent shutdown: entering sleep forever"));
     #if defined(__AVR__)
     wdt_disable();
     #endif
@@ -335,7 +347,7 @@
     digitalWrite(pinBuzzer, LOW);
     Stop();
     digitalWrite(pinMotorSleep, LOW);
-    digitalWrite(pinVL53L0X_XSHUT, LOW);
+    digitalWrite(pinVL53L1X_XSHUT, LOW);
     distanceTofDetected = false;
     powerDownColorSensorCore();
     digitalWrite(pinColorSensorLED, colorSensorLEDOffLevel);
@@ -377,7 +389,7 @@
     unsigned long now = millis();
 
     // LED swap every 300 ms (always runs, even when muted)
-    if (now - sirenTimer > 300) {
+    if (now - sirenTimer > SIREN_LED_SWAP_MS) {
       sirenPhase = !sirenPhase;
       if (sirenPhase) {
         SetRGBLight(true, false, false, 1);  // LED1 red

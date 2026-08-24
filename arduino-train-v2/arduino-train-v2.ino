@@ -42,7 +42,7 @@
   //   Dir                               - Motor direction state.
 
   // ===============================================================================================
-  #define DEBUG_ANY (DEBUG_COLOR_SENSOR || DEBUG_DISTANCE_SENSOR || DEBUG_IR_REMOTE || DEBUG_TILT_SENSOR || DEBUG_ACCELEROMETER || DEBUG_VOLTAGE_METER || DEBUG_EEPROM || DEBUG_MOTOR || DEBUG_LEDS || DEBUG_SOUND)
+  #define DEBUG_ANY (DEBUG_COLOR_SENSOR || DEBUG_DISTANCE_SENSOR || DEBUG_IR_REMOTE || DEBUG_TILT_SENSOR || DEBUG_ACCELEROMETER || DEBUG_POWER_MANAGEMENT || DEBUG_EEPROM || DEBUG_MOTOR || DEBUG_LEDS || DEBUG_SOUND)
   // DEBUG_ANY is true (non-zero) if at least one of the per-module DEBUG_* flags from config.h is
   // turned on. It is used just below to decide whether Serial (the USB debug connection) needs to
   // be started at all; if every debug flag is off, the code that would set up Serial is skipped
@@ -63,14 +63,14 @@
   // 0x53        event log head    uint8_t, next-write slot index (0..EEPROM_EVENT_LOG_SIZE-1)
   // 0x54..0xD3  event ring buffer 16 entries × 8 bytes each:
   //               bytes 0..1  boot_seq      — uint16_t (2 bytes)
-  //               byte 2      event_type    — 0x01 warning, 0x02 shutdown
+  //               byte 2      event_type    — 0x01 warning, 0x02 shutdown, 0x03 ToF fault, 0x04 critical overvoltage
   //               byte 3      battery       — pack voltage × 10 as uint8_t; 0xFF = not measured or invalid (>8.5 V for 2S)
   //               bytes 4..7  uptime_ms     — uint32_t milliseconds since setup()
   //
   // Error flag bit map:
   //   Bit 0  0x01  MCP23008 LED expander not detected
   //   Bit 1  0x02  TCS34725 color sensor not detected
-  //   Bit 2  0x04  VL53L0X distance sensor not detected
+  //   Bit 2  0x04  VL53L1X distance sensor not detected
   const uint16_t EEPROM_ADDR_BOOT_COUNT = 0x00;
   const uint8_t  EEPROM_ADDR_LOG_HEAD   = 0x02;
   const uint8_t  EEPROM_ADDR_LOG_BASE   = 0x03;
@@ -88,6 +88,7 @@
   const uint8_t  EEPROM_EVENT_WARNING  = 0x01;
   const uint8_t  EEPROM_EVENT_SHUTDOWN = 0x02;
   const uint8_t  EEPROM_EVENT_TOF_FAULT = 0x03;
+  const uint8_t  EEPROM_EVENT_OVERVOLTAGE = 0x04;
   #endif
 
   #if DEBUG_ANY
@@ -149,12 +150,12 @@
   #define DBGLN_ACCELEROMETER(...)
   #endif
 
-  #if DEBUG_VOLTAGE_METER
-  #define DBG_VOLTAGE_METER(...) Serial.print(__VA_ARGS__)
-  #define DBGLN_VOLTAGE_METER(...) Serial.println(__VA_ARGS__)
+  #if DEBUG_POWER_MANAGEMENT
+  #define DBG_POWER_MANAGEMENT(...) Serial.print(__VA_ARGS__)
+  #define DBGLN_POWER_MANAGEMENT(...) Serial.println(__VA_ARGS__)
   #else
-  #define DBG_VOLTAGE_METER(...)
-  #define DBGLN_VOLTAGE_METER(...)
+  #define DBG_POWER_MANAGEMENT(...)
+  #define DBGLN_POWER_MANAGEMENT(...)
   #endif
 
   #if DEBUG_EEPROM
@@ -219,34 +220,6 @@
     White
   };
 
-  // Track-marker classification labels.
-  // This one is a plain "enum" (not "enum class"), so its values (MarkerWhite, MarkerBrown, ...) can
-  // be used directly as plain numbers/uint8_t elsewhere in the code (for example, when stored
-  // compactly in the PROGMEM marker table below). Listing a value with no explicit number (like
-  // MarkerWhite here) automatically makes it one more than the previous entry.
-  enum TrackMarkerClass : uint8_t {
-    MarkerUnknown = 0,
-    MarkerWhite,
-    MarkerBrown,
-    MarkerCyan,
-    MarkerGreen,
-    MarkerGrey,
-    MarkerMagenta,
-    MarkerOrange,
-    MarkerYellow,
-    MarkerRed
-  };
-
-  // Normalized RGB prototype triple.
-  // A "struct" is a simple bundle of related variables grouped under one name, so a single
-  // PrototypeRgb variable carries its r/g/b values together instead of needing three separate
-  // variables that could get out of sync with each other.
-  struct PrototypeRgb {
-    uint16_t r;
-    uint16_t g;
-    uint16_t b;
-  };
-
   // White-balanced RGBC sample.
   struct BalancedRgbs {
     uint16_t r;
@@ -255,19 +228,25 @@
     uint16_t c;
   };
 
-  // Marker-cluster entry used by color matching.
-  struct MarkerClusterDefinition {
-    TrackMarkerClass markerClass;
-    PrototypeRgb center;
-    uint16_t maxDistance;
-  };
-
   // Battery warning/shutdown policy state. Inactivity sleep is handled separately.
   enum class BatteryState : uint8_t {
     Normal = 0,
     Warning,
     Shutdown
   };
+
+  // Visible/audible state reference:
+  //   Normal stopped/forward/reverse: motor stopped/forward/reverse; front red/white/blue; no fault sound; command changes state.
+  //   Normal auto: motor follows distance; green on and normal drive color; no fault sound; command disables auto.
+  //   Low-battery warning: motor and restricted features off; front/green off, rear red during alert; 1500 Hz alert repeats; recovers above BATTERY_WARNING_RECOVERY_MV.
+  //   Low-battery shutdown: motor and sensors disabled; rear red and 1500 Hz alert for BATTERY_SHUTDOWN_SIGNAL_MS, then all outputs off; power cycle only.
+  //   Critical overvoltage: motor disabled; front RGB, green, and sensor LEDs off; rear red steady; one pattern_criticalOvervoltage alert; power cycle only.
+  //   DRV8833 fault: motor disabled; front red, green off; pattern_batteryWarn; a motor command re-arms after the hardware fault clears.
+  //   Distance-sensor fault: motor stopped and auto disabled; front red; pattern_batteryWarn; restart/rearm required.
+  //   Tilt alarm: motor stopped and auto disabled; front red; pattern_tiltBeep; clears when the tilt input returns idle.
+  //   Idle-sleep warning: normal outputs remain active with a green blink; no distinct sound; activity cancels the timeout.
+  //   Idle sleep: motor and normal indicators off; pattern_descend before sleep and rear-red heartbeat while sleeping; IR wake restores normal operation.
+  //   Boot sensor errors: no dedicated visible/audible indication; recorded in the EEPROM boot error flags when logging is enabled.
 
   // LED expander pin mapping helper.
   struct LedRoute;
@@ -317,6 +296,9 @@
   void refreshDriveLights();
   uint16_t getBatteryVoltageSettledForStatus();
   void updateBatteryGuard();
+  bool isCriticalOvervoltage(uint16_t voltageMv);
+  void enterCriticalOvervoltage(uint16_t voltageMv, uint16_t averageRaw);
+  void applyCriticalOvervoltageOutputs();
   void updateGreenBlink();
   void updateMotorReverseCooldown();
   void initDistanceSensorHardware();
@@ -382,7 +364,7 @@
   //   D0  -> Hardware UART RX shared with USB serial and DEBUG output; avoid other peripherals.
   //   D1  -> Hardware UART TX shared with USB serial and DEBUG output; avoid other peripherals.
   //   D2  -> IR receiver input; also used as the wake interrupt source from sleep.
-  //   D3  -> VL53L0X XSHUT output for sensor reset / I2C address setup.
+  //   A3  -> VL53L1X XSHUT output for sensor reset / I2C address setup.
   //   D4  -> TCS34725 breakout LED control output.
   //   D5  -> DRV8833 IN1 motor drive PWM/direction output.
   //   D6  -> DRV8833 IN2 motor drive PWM/direction output.
@@ -397,8 +379,8 @@
   //   A1  -> Free analog-input-only pin.
   //   A2  -> Free analog-input-only pin.
   //   A3  -> Free analog-input-only pin used here as general-purpose digital spare.
-  //   A4  -> I2C SDA shared by the MCP23008, TCS34725, and VL53L0X.
-  //   A5  -> I2C SCL shared by the MCP23008, TCS34725, and VL53L0X.
+  //   A4  -> I2C SDA shared by the MCP23008, TCS34725, and VL53L1X.
+  //   A5  -> I2C SCL shared by the MCP23008, TCS34725, and VL53L1X.
   //   A6  -> Free analog-input-only pin.
   //   A7  -> Free analog-input-only pin.
   // SPI note: SPI is not used in this sketch, but an SPI peripheral would conflict with the buzzer
@@ -527,18 +509,17 @@
   //   MCP GP5     -> RGB LED #2 Blue transistor base resistor
   //   MCP GP6     -> Green LED transistor base resistor
   //   MCP GP7     -> currently unused / spare
-  const uint8_t mcpAddressTrainLeds = 0x20;
   TrainLedMCP23008 trainLedExpander;
   bool trainLedExpanderDetected = false;
-  const LedRoute led1R = { 0 };
-  const LedRoute led1G = { 1 };
-  const LedRoute led1B = { 2 };
-  const LedRoute led2R = { 3 };
-  const LedRoute led2G = { 4 };
-  const LedRoute led2B = { 5 };
-  const LedRoute ledGreen = { 6 };
+  const LedRoute led1R = { led1RedExpanderPin };
+  const LedRoute led1G = { led1GreenExpanderPin };
+  const LedRoute led1B = { led1BlueExpanderPin };
+  const LedRoute led2R = { led2RedExpanderPin };
+  const LedRoute led2G = { led2GreenExpanderPin };
+  const LedRoute led2B = { led2BlueExpanderPin };
+  const LedRoute ledGreen = { ledGreenExpanderPin };
   // GP7 drives two rear red LEDs wired in parallel and treated as one warning/shutdown indicator.
-  const LedRoute ledRearRed = { 7 };
+  const LedRoute ledRearRed = { ledRearRedExpanderPin };
 
   // ================================================================================================
   // Buzzer sound patterns
@@ -549,14 +530,14 @@
   const uint16_t pattern_descend[] PROGMEM = { 120, 80, 120, 80, 120, 0 };
   const uint16_t pattern_horn[] PROGMEM = { 1000, 100, 0 };
   const uint16_t pattern_tiltBeep[] PROGMEM = { 500, 0 };  // single 0.5s beep
+  const uint16_t pattern_criticalOvervoltage[] PROGMEM = {
+    180, 90, 180, 90, 600, 0
+  };
   const int16_t melodyWakeReady[] = { 988, 120, 1319, 180 };
 
   // ================================================================================================
   // Other constants
   // ================================================================================================
-  const uint16_t batteryPercentMvTable[] PROGMEM = { 8400, 8200, 8050, 7900, 7750, 7600, 7450, 7350, 7250, 7200, 7150 };
-  const uint8_t batteryPercentTableSize = sizeof(batteryPercentMvTable) / sizeof(batteryPercentMvTable[0]);
-
   // ================================================================================================
   // Control variables
   // ================================================================================================
@@ -564,6 +545,7 @@
   bool AutoDistanceOnOff = false;
   bool ColorSensorOnOff = false;
   BatteryState batteryState = BatteryState::Normal;
+  bool criticalOvervoltageLatched = false;
   uint8_t MotorDirection = 1;   // always has a direction
   uint8_t Speed = 0;            // stopped at start
 
@@ -581,8 +563,6 @@
   bool momentaryActive = false;
   uint8_t momentaryButton = 0;
   unsigned long momentaryLastSeen = 0;
-  const unsigned long momentaryTimeout = 200;  // ms after last repeat → stop
-
   // --- IR repeat tracking ---
   uint8_t lastIRCommand = 0;
   bool lastWasRepeat = false;
@@ -592,7 +572,6 @@
   // Timers
   unsigned long bootStartedAt = 0;
   unsigned long lastActive = 0;
-  const unsigned long idleTimeout = 5UL * 60UL * 1000UL;  // 5 minutes
   unsigned long lastBatteryDebugPrintMs = 0;
   unsigned long lastBatteryCheckMs = 0;
   unsigned long lastBatteryWarningSignalMs = 0;
@@ -613,9 +592,6 @@
   uint8_t greenBlinkRemaining = 0;
   bool greenBlinkOn = false;
   unsigned long greenBlinkStepMs = 0;
-  const unsigned long greenBlinkOnMs = 100;
-  const unsigned long greenBlinkOffMs = 50;
-
   // Non-blocking reverse-direction cooldown
   unsigned long motorReverseReadyAt = 0;
   bool motorDrivePending = false;
@@ -633,8 +609,6 @@
   uint16_t batteryVoltage = 0;
   uint16_t loadedBatteryVoltage = 0;
   unsigned long lastLoadedBatteryReadMs = 0;
-  const unsigned long loadedBatteryReadEveryMs = 250;
-
   // Buzzer
   #define BUZZER_PATTERN_MAX 20
   uint16_t buzzerPattern[BUZZER_PATTERN_MAX];
@@ -650,14 +624,9 @@
   int sirenPhase = 0;  // 0=LED1 red, 1=LED1 blue
 
   // Siren timing (time-based sweep → stable even with loop jitter)
-  const int sirenFmin = 400;
-  const int sirenFmax = 800;
-  const unsigned long sirenSweepMs = 800;  // up in 800 ms, down in 800 ms
   unsigned long sirenStartMs = 0;          // set when siren toggles ON
 
   // ── Tilt sensor debounce config/state ─────────────────────────────────────────
-  const unsigned long TILT_STABLE_MS = 1000;  // must hold this long to confirm state
-  const unsigned long TILT_QUIET_MS = 500;   // ignore flips for a short time after change
   int tiltStableState = HIGH;                // external pull-up: OPEN=HIGH (idle)
   int tiltLastRead = HIGH;
   unsigned long tiltEdgeAt = 0;
@@ -718,17 +687,21 @@
 
     // Battery must be measured before writeBootErrorCodes() so the voltage is included in the log.
     batteryVoltage = getBatteryVoltageDirect();
+    if (criticalOvervoltageLatched) {
+      // The latch was already set inside getBatteryVoltageDirect() - stop setup here.
+      return;
+    }
     // F("...") wraps a text string so it stays stored in flash memory (PROGMEM) instead of being
     // copied into precious SRAM at startup. Debug/status text is a great candidate for F() because
     // it's read-only and only needed occasionally, freeing up SRAM for actual program data. This
     // sketch uses F() throughout for Serial.print/println debug strings for the same reason.
-    DBG_VOLTAGE_METER(F("Battery measured: "));
+    DBG_POWER_MANAGEMENT(F("Battery measured: "));
     if (batteryVoltage > BATTERY_MAX_VALID_MV) {
-      DBGLN_VOLTAGE_METER(F("invalid (>8.5V on 2S or meter error)"));
+      DBGLN_POWER_MANAGEMENT(F("invalid (>8.5V on 2S or meter error)"));
     } else {
-      DBG_VOLTAGE_METER(batteryVoltage / 1000);
-      DBG_VOLTAGE_METER(F("."));
-      DBGLN_VOLTAGE_METER((batteryVoltage % 1000) / 10);
+      DBG_POWER_MANAGEMENT(batteryVoltage / 1000);
+      DBG_POWER_MANAGEMENT(F("."));
+      DBGLN_POWER_MANAGEMENT((batteryVoltage % 1000) / 10);
     }
 
     #if ENABLE_EEPROM_LOGGING
@@ -771,6 +744,12 @@
     wdt_reset();
     #endif
 
+    if (criticalOvervoltageLatched) {
+      applyCriticalOvervoltageOutputs();
+      updateBuzzer();
+      return;
+    }
+
     // === 1. DRV8833 fault watchdog ===
     // Reads the motor-driver fault pin and latches a safe stop if the driver reports an error such
     // as overcurrent or thermal protection. This must run early so later drive commands cannot
@@ -787,8 +766,9 @@
     if (!idleSleepWarningIssued
         && canEnterIdleSleep()
         && !idleSleepActive
-        && (millis() - lastActive) >= (idleTimeout - 15000UL)) {
+        && (millis() - lastActive) >= (idleTimeout - IDLE_SLEEP_WARNING_LEAD_MS)) {
       idleSleepWarningIssued = true;
+      DBGLN_POWER_MANAGEMENT(F("Idle sleep warning issued"));
       GreenLEDBlink();
     }
 

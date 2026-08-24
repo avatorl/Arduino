@@ -73,6 +73,7 @@
       case EEPROM_EVENT_WARNING: return F("low battery warning");
       case EEPROM_EVENT_SHUTDOWN: return F("low battery shutdown");
       case EEPROM_EVENT_TOF_FAULT: return F("distance sensor fault");
+      case EEPROM_EVENT_OVERVOLTAGE: return F("critical overvoltage/meter fault");
       default: return F("unknown event");
     }
   }
@@ -261,7 +262,7 @@
     else { DBG_LEDS(battByte / 10); DBG_LEDS(F(".")); DBGLN_LEDS(battByte % 10); }
     if (flags & ERR_LED_EXPANDER) { DBGLN_LEDS(F("  ERR 0x01: MCP23008 LED expander not detected")); }
     if (flags & ERR_COLOR_SENSOR) { DBGLN_LEDS(F("  ERR 0x02: TCS34725 color sensor not detected")); }
-    if (flags & ERR_DISTANCE_TOF) { DBGLN_LEDS(F("  ERR 0x04: VL53L0X distance sensor not detected")); }
+    if (flags & ERR_DISTANCE_TOF) { DBGLN_LEDS(F("  ERR 0x04: VL53L1X distance sensor not detected")); }
     if (flags == 0) { DBGLN_LEDS(F("  All sensors OK")); }
     #endif
 
@@ -361,9 +362,54 @@
     SetRGBLightColor(RgbColor::Off);
   }
 
+  // 0 mV is unavailable and ignored; 8500 mV is valid; 8501 mV latches immediately;
+  // readings above 8501 mV remain latched without repeating the alert or EEPROM event.
+  bool isCriticalOvervoltage(uint16_t voltageMv) {
+    return voltageMv > BATTERY_MAX_VALID_MV;
+  }
+
+  // Latch a critical overvoltage fault until the next power cycle.
+  // The averageRaw parameter distinguishes ADC saturation (likely disconnected sensor or wiring
+  // fault) from genuine overvoltage: if averageRaw >= 1023, the ADC is maxed out and the reading
+  // is unreliable; we latch for safety but log it as a meter fault rather than confirmed overvoltage.
+  void enterCriticalOvervoltage(uint16_t voltageMv, uint16_t averageRaw) {
+    if (criticalOvervoltageLatched) return;
+
+    criticalOvervoltageLatched = true;
+    applyBatteryRestrictions();
+    batterySignalActive = false;
+    batterySignalUsesTone = false;
+    idleSleepActive = false;
+    idleSleepWarningIssued = false;
+    idleWakeRequested = false;
+    Stop();
+    digitalWrite(pinMotorSleep, LOW);
+    digitalWrite(pinVL53L1X_XSHUT, LOW);
+    distanceTofDetected = false;
+    powerDownColorSensorCore();
+    applyCriticalOvervoltageOutputs();
+    playPattern(pattern_criticalOvervoltage, true);
+    #if ENABLE_EEPROM_LOGGING
+    logBatteryEvent(EEPROM_EVENT_OVERVOLTAGE, voltageMv);
+    #endif
+    
+    if (averageRaw >= BATTERY_ADC_MAX) {
+      DBG_POWER_MANAGEMENT(F("CRITICAL: Voltage meter saturated (ADC="));
+      DBG_POWER_MANAGEMENT(averageRaw);
+      DBG_POWER_MANAGEMENT(F(") - sensor disconnected/failed or >8.5V; "));
+      DBGLN_POWER_MANAGEMENT(F("power cycle required"));
+    } else {
+      DBG_POWER_MANAGEMENT(F("CRITICAL: Overvoltage detected: "));
+      DBG_POWER_MANAGEMENT(voltageMv);
+      DBG_POWER_MANAGEMENT(F(" mV (>8.5V limit); "));
+      DBGLN_POWER_MANAGEMENT(F("power cycle required"));
+    }
+  }
+
   // Enter low-battery warning mode and start its repeating signal.
   void enterBatteryWarning() {
     if (batteryState == BatteryState::Warning) return;
+    DBGLN_POWER_MANAGEMENT(F("Battery WARNING level: entering restricted mode"));
     batteryState = BatteryState::Warning;
     applyBatteryRestrictions();
     lastBatteryWarningSignalMs = millis();
@@ -376,6 +422,7 @@
   // Leave low-battery warning mode after the pack has recovered enough.
   void exitBatteryWarning() {
     if (batteryState != BatteryState::Warning) return;
+    DBGLN_POWER_MANAGEMENT(F("Battery warning cleared after recharge margin"));
     batteryState = BatteryState::Normal;
     lastBatteryWarningSignalMs = 0;
     if (!batterySignalActive) SetRearRedLight(false);
@@ -392,12 +439,13 @@
       return;
     }
 
+    DBGLN_POWER_MANAGEMENT(F("Battery SHUTDOWN level: entering lockout"));
     batteryState = BatteryState::Shutdown;
     shutdownSignalPlayedThisBoot = startupLockout;
     applyBatteryRestrictions();
     stopAndResetStepSelection(true);
     digitalWrite(pinMotorSleep, LOW);
-    digitalWrite(pinVL53L0X_XSHUT, LOW);
+    digitalWrite(pinVL53L1X_XSHUT, LOW);
     distanceTofDetected = false;
     distanceTofFaultLatched = true;
     startBatterySignal(BATTERY_SHUTDOWN_SIGNAL_MS, true);
@@ -416,7 +464,7 @@
     SetRearRedLight(false);
     noTone(pinBuzzer);
     digitalWrite(pinBuzzer, LOW);
-    digitalWrite(pinVL53L0X_XSHUT, HIGH);
+    digitalWrite(pinVL53L1X_XSHUT, HIGH);
     delay(10);
     startDistanceSensorRanging();
     digitalWrite(pinMotorSleep, HIGH);
@@ -440,6 +488,7 @@
   // Enter inactivity sleep and stay there until a valid wake command is captured.
   void goToIdle() {
     DBGLN_IR_REMOTE(F("Idle: turning everything off..."));
+    DBGLN_POWER_MANAGEMENT(F("Idle sleep: entering sleep"));
     idleSleepActive = true;
 
     noTone(pinBuzzer);
@@ -458,7 +507,7 @@
     DBGLN_IR_REMOTE(F("Entering sleep mode..."));
     for (;;) {
       digitalWrite(pinMotorSleep, LOW);  // Disable the DRV8833 while the Arduino sleeps.
-      digitalWrite(pinVL53L0X_XSHUT, LOW); // Turn off VL53L0X for sleep
+      digitalWrite(pinVL53L1X_XSHUT, LOW); // Turn off VL53L1X for sleep
       idleWakeRequested = false;
       // attachInterrupt(pin, function, mode) tells the chip to run "function" automatically the
       // instant the given pin changes state matching "mode" (CHANGE = either LOW->HIGH or
@@ -494,7 +543,7 @@
       }
       detachInterrupt(digitalPinToInterrupt(pinIRReceiver));
 
-      digitalWrite(pinVL53L0X_XSHUT, HIGH); // Wake up VL53L0X
+      digitalWrite(pinVL53L1X_XSHUT, HIGH); // Wake up VL53L1X
       delay(10); // boot time
       startDistanceSensorRanging();
 
@@ -507,6 +556,7 @@
     }
     idleSleepActive = false;
     lastActive = millis();
+    DBGLN_POWER_MANAGEMENT(F("Idle sleep: wake successful"));
     playToneSequence_P(melodyWakeReady, false);
     refreshDriveLights();
   }
@@ -553,8 +603,11 @@
   // project, the "+ half-of-divisor" before the final division rounds to the nearest value instead
   // of always truncating downward.
   uint16_t getBatteryVoltageDirect() {
+    #if DISABLE_VOLTAGE_METERING
+    return 5000;  // 5.0V constant
+    #else
     uint32_t rawSum = 0;
-    #if DEBUG_VOLTAGE_METER
+    #if DEBUG_POWER_MANAGEMENT
     uint32_t rawDebugSum = 0;
     #endif
 
@@ -564,36 +617,45 @@
     for (uint8_t sampleIndex = 0; sampleIndex < BATTERY_ADC_SAMPLES; ++sampleIndex) {
       uint16_t rawValue = (uint16_t)analogRead(pinBatterySense);
       rawSum += rawValue;
-      #if DEBUG_VOLTAGE_METER
+      #if DEBUG_POWER_MANAGEMENT
       rawDebugSum += rawValue;
       #endif
     }
 
+    uint16_t averageRaw = (uint16_t)((rawSum + (BATTERY_ADC_SAMPLES / 2U)) / BATTERY_ADC_SAMPLES);
     uint32_t scaledSum = rawSum * BATTERY_MILLIVOLT_SCALE_NUMERATOR;
     uint16_t averagedVoltageMv = (uint16_t)((scaledSum + ((uint32_t)BATTERY_ADC_MAX * BATTERY_ADC_SAMPLES) / 2UL)
                                / ((uint32_t)BATTERY_ADC_MAX * BATTERY_ADC_SAMPLES));
 
-    #if DEBUG_VOLTAGE_METER
+    #if DEBUG_POWER_MANAGEMENT
     unsigned long now = millis();
     if (now - lastBatteryDebugPrintMs >= 1000UL) {
       lastBatteryDebugPrintMs = now;
       uint16_t averageRawTimes10 = (uint16_t)((rawDebugSum * 10UL + (BATTERY_ADC_SAMPLES / 2U)) / BATTERY_ADC_SAMPLES);
-      DBG_VOLTAGE_METER(F("Battery ADC avg raw="));
-      DBG_VOLTAGE_METER(averageRawTimes10 / 10);
-      if (averageRawTimes10 >= (BATTERY_ADC_MAX * 10U) || averagedVoltageMv > BATTERY_MAX_VALID_MV) {
-        DBGLN_VOLTAGE_METER(F(" -> meter error or >8.5V on 2S"));
+      DBG_POWER_MANAGEMENT(F("Battery ADC avg raw="));
+      DBG_POWER_MANAGEMENT(averageRawTimes10 / 10);
+      if (averageRaw >= BATTERY_ADC_MAX) {
+        DBGLN_POWER_MANAGEMENT(F(" -> meter saturated/disconnected (critical latch)"));
+      } else if (averagedVoltageMv > BATTERY_MAX_VALID_MV) {
+        DBGLN_POWER_MANAGEMENT(F(" -> >8.5V overvoltage (critical latch)"));
+      } else if (averageRawTimes10 >= (BATTERY_ADC_MAX * 10U)) {
+        DBGLN_POWER_MANAGEMENT(F(" -> meter unavailable/ADC error"));
       } else {
-        DBG_VOLTAGE_METER(F("."));
-        DBG_VOLTAGE_METER(averageRawTimes10 % 10);
-        DBG_VOLTAGE_METER(F(" -> V="));
-        DBG_VOLTAGE_METER(averagedVoltageMv / 1000);
-        DBG_VOLTAGE_METER(F("."));
-        DBGLN_VOLTAGE_METER((averagedVoltageMv % 1000) / 10);
+        DBG_POWER_MANAGEMENT(F("."));
+        DBG_POWER_MANAGEMENT(averageRawTimes10 % 10);
+        DBG_POWER_MANAGEMENT(F(" -> V="));
+        DBG_POWER_MANAGEMENT(averagedVoltageMv / 1000);
+        DBG_POWER_MANAGEMENT(F("."));
+        DBGLN_POWER_MANAGEMENT((averagedVoltageMv % 1000) / 10);
       }
     }
     #endif
 
+    if (isCriticalOvervoltage(averagedVoltageMv)) {
+      enterCriticalOvervoltage(averagedVoltageMv, averageRaw);
+    }
     return averagedVoltageMv;
+    #endif
   }
 
   // Stop loads, let the pack settle, then measure.
@@ -624,6 +686,7 @@
         && !batterySignalActive
         && now - lastBatteryWarningSignalMs >= BATTERY_WARNING_REPEAT_MS) {
       lastBatteryWarningSignalMs = now;
+      DBGLN_POWER_MANAGEMENT(F("Battery WARNING level: issuing periodic signal"));
       startBatterySignal(BATTERY_WARNING_SIGNAL_MS, true);
     }
 
@@ -634,6 +697,7 @@
 
     uint16_t previousBatteryVoltage = batteryVoltage;
     uint16_t v = getBatteryVoltageDirect();  // while stopped => closest available pack reading
+    if (criticalOvervoltageLatched) return;
     if (v <= 0) return;
     batteryVoltage = v;
     if (previousBatteryVoltage == 0 || abs((int)v - (int)previousBatteryVoltage) >= 50) {
@@ -641,13 +705,10 @@
     }
 
     if (v <= BATTERY_LOW_SHUTDOWN_MV) {
-      DBGLN_VOLTAGE_METER(F("Battery SHUTDOWN level: entering lockout"));
       enterBatteryShutdown();
     } else if (v <= BATTERY_LOW_WARNING_MV) {
-      DBGLN_VOLTAGE_METER(F("Battery WARNING level"));
       enterBatteryWarning();
     } else if (batteryState == BatteryState::Warning && v >= BATTERY_WARNING_RECOVERY_MV) {
-      DBGLN_VOLTAGE_METER(F("Battery warning cleared after recharge margin"));
       exitBatteryWarning();
     }
   }
@@ -663,9 +724,11 @@
 
   // Return the latest loaded battery reading used by motor-control calculations.
   uint16_t getLoadedBatteryVoltageForMotorControl() {
+    if (criticalOvervoltageLatched) return 0;
     unsigned long now = millis();
     if (now - lastLoadedBatteryReadMs >= loadedBatteryReadEveryMs) {
       uint16_t measuredVoltage = getBatteryVoltageDirect();
+      if (criticalOvervoltageLatched) return 0;
       if (measuredVoltage > 0) {
         loadedBatteryVoltage = measuredVoltage;
         lastLoadedBatteryReadMs = now;
@@ -673,7 +736,8 @@
     }
     if (loadedBatteryVoltage > 0) return loadedBatteryVoltage;
     if (batteryVoltage > 0) return batteryVoltage;
-    return getBatteryVoltageDirect();
+    uint16_t measuredVoltage = getBatteryVoltageDirect();
+    return criticalOvervoltageLatched ? 0 : measuredVoltage;
   }
 
   // Convert a requested motor voltage into PWM based on the current pack voltage.
