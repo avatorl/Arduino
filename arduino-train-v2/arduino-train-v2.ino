@@ -75,6 +75,7 @@
   //   Bit 0  0x01  MCP23008 LED expander not detected
   //   Bit 1  0x02  TCS34725 color sensor not detected
   //   Bit 2  0x04  VL53L1X distance sensor not detected
+  //   Bit 3  0x08  MPU6050 accelerometer not detected
   const uint16_t EEPROM_ADDR_BOOT_COUNT = 0x00;
   const uint8_t  EEPROM_ADDR_LOG_HEAD   = 0x02;
   const uint8_t  EEPROM_ADDR_LOG_BASE   = 0x03;
@@ -89,6 +90,7 @@
   const uint8_t  ERR_LED_EXPANDER = 0x01;
   const uint8_t  ERR_COLOR_SENSOR = 0x02;
   const uint8_t  ERR_DISTANCE_TOF = 0x04;
+  const uint8_t  ERR_ACCELEROMETER = 0x08;
   const uint8_t  EEPROM_EVENT_WARNING  = 0x01;
   const uint8_t  EEPROM_EVENT_SHUTDOWN = 0x02;
   const uint8_t  EEPROM_EVENT_TOF_FAULT = 0x03;
@@ -308,13 +310,24 @@
   void initDistanceSensorHardware();
   void initAccelerometerHardware();
   void updateAccelerometerSafety();
-  bool startDistanceSensorRanging(bool reinitializeSensor = true);
+  // sleepAccelerometer()/wakeAccelerometer() live in 43-accelerometer.ino and are declared here so
+  // earlier-compiled tabs (30-lights-and-sounds.ino, 50-power-management.ino) can park the MPU6050
+  // in its low-power sleep mode during idle sleep and permanent shutdown.
+  void sleepAccelerometer();
+  void wakeAccelerometer();
+  bool startDistanceSensorRanging();
+  // Starts or stops VL53L1X continuous ranging without a full re-init. Ranging is only needed while
+  // auto-distance mode is active, so stopping it saves power and I2C traffic the rest of the time.
+  void setDistanceSensorRangingActive(bool active);
   int getDistanceReading();
   uint8_t irReceive();
   bool tryPlayMelodyForButton(uint8_t code);
   bool isMotorControlCommand(uint8_t code);
   void translateIR();
   void exitAutoDistanceMode(bool clearIndicator = true);
+  // Clears the auto-mode obstacle stop latch (hysteresis state in 20-motor.ino) so a freshly
+  // enabled auto session never starts from a stale "stopped by obstacle" decision.
+  void resetAutoDistanceState();
   void stopAndResetStepSelection(bool resetDirection = false);
   void cancelJog();
   int get2SBatteryPercent(uint16_t voltageMv);
@@ -324,9 +337,9 @@
   void enterBatteryWarning();
   void exitBatteryWarning();
   void enterBatteryShutdown(bool startupLockout = false);
-  void exitBatteryShutdown();
   void updateBatterySignal();
   void clearBuzzerPattern();
+  bool isBuzzerPatternPlaying();
   void waitForPatternPlayback(unsigned long timeoutMs);
   void performPermanentShutdown();
   bool captureWakeIrCommand(unsigned long timeoutMs);
@@ -370,23 +383,24 @@
   //   D0  -> Hardware UART RX shared with USB serial and DEBUG output; avoid other peripherals.
   //   D1  -> Hardware UART TX shared with USB serial and DEBUG output; avoid other peripherals.
   //   D2  -> IR receiver input; also used as the wake interrupt source from sleep.
-  //   A3  -> VL53L1X XSHUT output for sensor reset / I2C address setup.
-  //   D4  -> TCS34725 breakout LED control output.
+  //   D3  -> Free digital pin.
+  //   D4  -> Free digital pin.
   //   D5  -> DRV8833 IN1 motor drive PWM/direction output.
   //   D6  -> DRV8833 IN2 motor drive PWM/direction output.
   //   D7  -> DRV8833 nSLEEP output, HIGH = enabled, LOW = sleep.
   //   D8  -> DRV8833 nFAULT input with internal pull-up; active LOW.
-  //   D9  -> Tilt sensor input with internal pull-up; switch closes to GND.
+  //   D9  -> Tilt sensor input with internal pull-up; switch is closed to GND while the train is
+  //          upright (reads LOW) and opens when tilted (pull-up takes the pin HIGH = alarm).
   //   D10 -> Free digital-only pin; do not use analogWrite because IRremote owns Timer1.
   //   D11 -> Free general-purpose digital pin if SPI is not needed; also SPI MOSI.
   //   D12 -> Passive buzzer output driven by tone(); also SPI MISO.
   //   D13 -> Free digital pin; also tied to the Nano onboard LED and SPI SCK.
   //   A0  -> Battery voltage sense analog input.
   //   A1  -> Free analog-input-only pin.
-  //   A2  -> Free analog-input-only pin.
-  //   A3  -> Free analog-input-only pin used here as general-purpose digital spare.
-  //   A4  -> I2C SDA shared by the MCP23008, TCS34725, and VL53L1X.
-  //   A5  -> I2C SCL shared by the MCP23008, TCS34725, and VL53L1X.
+  //   A2  -> TCS34725 breakout LED control output (digital-capable analog pin).
+  //   A3  -> VL53L1X XSHUT output for sensor reset / I2C address setup.
+  //   A4  -> I2C SDA shared by the MCP23008, TCS34725, VL53L1X, and MPU6050.
+  //   A5  -> I2C SCL shared by the MCP23008, TCS34725, VL53L1X, and MPU6050.
   //   A6  -> Free analog-input-only pin.
   //   A7  -> Free analog-input-only pin.
   // SPI note: SPI is not used in this sketch, but an SPI peripheral would conflict with the buzzer
@@ -430,12 +444,9 @@
     uint8_t gpioShadow = 0x00;
 
     // Initialize the MCP23008 over I2C and seed the shadow registers.
+    // Note: the shared I2C bus itself (Wire.begin, clock speed, timeout, bus-clear) is configured
+    // once in initI2cBus() from setup(), before any device driver runs - not here.
     bool begin_I2C(uint8_t i2cAddress) {
-      Wire.begin();
-      #if defined(WIRE_HAS_TIMEOUT)
-      Wire.setWireTimeout(3000, true);
-      Wire.clearWireTimeoutFlag();
-      #endif
       address = i2cAddress;
       iodirShadow = 0xFF;
       gpioShadow = 0x00;
@@ -496,13 +507,13 @@
   //   Nano A5/SCL -> MCP23008 SCL and TCS34725 SCL
   //   Nano 5V     -> MCP23008 VCC and TCS34725 VIN/VCC
   //   Nano GND    -> MCP23008 GND and TCS34725 GND
-  //   MCP23008 address pins A0/A1/A2 -> GND so the expander stays at I2C address 0x20
+  //   MCP23008 address pins A0/A1 -> GND and A2 -> 5V, giving I2C address 0x24 (0x20 + A2 bit)
   //   MCP23008 RESET -> pull HIGH (10 kOhm to 5V preferred; direct tie to 5V also works)
   //   MCP23008 VDD/GND -> place a 100 nF ceramic decoupling capacitor close to the chip
   //   SDA/SCL     -> need one effective I2C pull-up pair on the whole bus (typically 4.7 kOhm to 5V)
   //                  add pull-ups only if the connected breakouts/modules do not already provide them
   //   MCP23008 INT -> optional in this revision; leave unconnected if not used
-  //   Nano D4     -> TCS34725 LED pin for breakout illumination control
+  //   Nano A2     -> TCS34725 LED pin for breakout illumination control
   //   TCS34725 INT stays unconnected in this revision
   //   TCS34725 LED pin is assumed active-HIGH in this sketch; swap the on/off levels below if your
   //   breakout uses active-LOW LED control instead
@@ -539,7 +550,10 @@
   const uint16_t pattern_criticalOvervoltage[] PROGMEM = {
     180, 90, 180, 90, 600, 0
   };
-  const int16_t melodyWakeReady[] = { 988, 120, 1319, 180 };
+  // PROGMEM keeps this short wake-up jingle in flash. It is REQUIRED here because
+  // playToneSequence_P() always reads its notes with pgm_read_word() (a flash-read instruction);
+  // without PROGMEM the array would live in SRAM and the flash reads would return garbage notes.
+  const int16_t melodyWakeReady[] PROGMEM = { 988, 120, 1319, 180 };
 
   // ================================================================================================
   // Other constants
@@ -633,7 +647,12 @@
   unsigned long sirenStartMs = 0;          // set when siren toggles ON
 
   // ── Tilt sensor debounce config/state ─────────────────────────────────────────
-  int tiltStableState = HIGH;                // external pull-up: OPEN=HIGH (idle)
+  // Polarity (matches the D9 wiring note above): the switch is CLOSED to GND while the train is
+  // upright, so LOW = idle/upright; when the train tips over the switch OPENS and the internal
+  // pull-up takes the pin HIGH = tilt alarm. Both states start as HIGH on purpose: if the train
+  // boots upright, the first stable LOW reading lands in the harmless "IDLE" branch of
+  // updateTiltSensor(), which simply refreshes the drive lights once.
+  int tiltStableState = HIGH;
   int tiltLastRead = HIGH;
   unsigned long tiltEdgeAt = 0;
   unsigned long tiltQuietUntil = 0;
@@ -653,6 +672,52 @@
 
   // One-time hardware initialization and startup behavior.
   // Initialize hardware and startup state.
+
+  // ================================================================================================
+  // Shared I2C bus initialization
+  // ================================================================================================
+  // Called exactly once from setup(), BEFORE any I2C device driver (MCP23008, TCS34725, VL53L1X,
+  // MPU6050) touches the bus. Doing this in one place (instead of inside every driver's begin())
+  // guarantees every device sees the same bus speed and timeout settings.
+  void initI2cBus() {
+    // --- Step 1: bus recovery ("bus clear") ---
+    // If the Nano resets in the middle of an I2C read (brown-out, watchdog reset), a slave chip can
+    // be left holding the SDA data line LOW, which deadlocks the whole bus forever. The standard
+    // fix (I2C spec section 3.1.16) is to manually pulse SCL up to 9 times so the stuck slave
+    // finishes clocking out its byte and releases SDA, then issue a STOP condition.
+    // This must run before Wire.begin() because it bit-bangs the pins directly.
+    pinMode(A4, INPUT_PULLUP);  // A4 = SDA on the Nano
+    pinMode(A5, INPUT_PULLUP);  // A5 = SCL on the Nano
+    delayMicroseconds(5);
+    if (digitalRead(A4) == LOW) {  // Only intervene when a slave is actually holding SDA low.
+      for (uint8_t i = 0; i < 9 && digitalRead(A4) == LOW; i++) {
+        pinMode(A5, OUTPUT);       // Drive SCL low...
+        digitalWrite(A5, LOW);
+        delayMicroseconds(5);
+        pinMode(A5, INPUT_PULLUP); // ...then release it high (open-drain style, ~100 kHz pace).
+        delayMicroseconds(5);
+      }
+      // Generate a STOP condition (SDA rising while SCL is high) to reset every slave's bus state.
+      pinMode(A4, OUTPUT);
+      digitalWrite(A4, LOW);
+      delayMicroseconds(5);
+      pinMode(A4, INPUT_PULLUP);
+      delayMicroseconds(5);
+    }
+    // --- Step 2: start the Wire library and configure the bus ---
+    Wire.begin();
+    // 400 kHz "Fast Mode": all four devices on this bus support it, and it cuts every sensor
+    // read/write to a quarter of the default 100 kHz time - important for a loop() that must stay
+    // fast. If a future device only supports 100 kHz, lower this value.
+    Wire.setClock(400000);
+    #if defined(WIRE_HAS_TIMEOUT)
+    // Without a timeout, a wedged bus would make Wire calls block forever and the watchdog would
+    // keep resetting the train. 3000 us timeout + auto-reset of the Wire hardware on timeout.
+    Wire.setWireTimeout(3000, true);
+    Wire.clearWireTimeoutFlag();
+    #endif
+  }
+
   void setup() {
     #if defined(__AVR__)
     MCUSR = 0;
@@ -679,6 +744,7 @@
     #endif
 
     // Initialize Arduino pins
+    initI2cBus();  // Must run before any I2C device init below (bus clear + speed + timeout).
     initTrainLedHardware();
     pinMode(pinBuzzer, OUTPUT);
     pinMode(pinMotor_IN1, OUTPUT);
@@ -718,12 +784,17 @@
     #endif
     #endif
 
+    #if !DISABLE_VOLTAGE_METERING
+    // PRODUCTION-only low-battery protection: these checks are compiled out in a
+    // DISABLE_VOLTAGE_METERING=1 testing build, where a bench 5 V supply would otherwise look like
+    // a deeply discharged pack and lock the train in shutdown at every boot.
     if (batteryVoltage <= BATTERY_LOW_SHUTDOWN_MV) {
       enterBatteryShutdown(true);
       return;
     } else if (batteryVoltage <= BATTERY_LOW_WARNING_MV) {
       enterBatteryWarning();
     }
+    #endif
 
     //playPattern(pattern_melody);  // Play melody
     SetGreenLightValue(0);
@@ -734,7 +805,7 @@
     configureSpeedSteps();
 
     lastActive = millis();            // seed idle timer
-    IrReceiver.begin(pinIRReceiver, DISABLE_LED_FEEDBACK);  // Keep D13 dedicated to DRV8833 nSLEEP.
+    IrReceiver.begin(pinIRReceiver, DISABLE_LED_FEEDBACK);  // No D13 feedback blink; keeps the pin free and saves flash.
     irReceiverStarted = true;
   }
 
@@ -751,8 +822,16 @@
     #endif
 
     if (criticalOvervoltageLatched) {
+      // Critical overvoltage: keep every output in its safe state and let the one-time alert
+      // pattern finish, then drop into permanent deep sleep instead of spinning in loop() forever
+      // (spinning would keep the MCU, sensors, and IR receiver drawing current from a supply that
+      // is already suspected to be faulty). The rear red indicator stays lit while sleeping - see
+      // performPermanentShutdown(). Recovery requires a physical power cycle.
       applyCriticalOvervoltageOutputs();
       updateBuzzer();
+      if (!isBuzzerPatternPlaying()) {
+        performPermanentShutdown();
+      }
       return;
     }
 

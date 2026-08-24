@@ -16,27 +16,6 @@
   //   8 | 4       28 | 5       90 | 6
   //  66 | 7       82 | 8       74 | 9
 
-  // IR remote button assignments
-  const int buttonCHminus = 69;     // Speed -
-  const int buttonCH = 70;          // Stop
-  const int buttonCHplus = 71;      // Speed +
-  const int buttonBackward = 68;    // Momentary backward
-  const int buttonForward = 64;     // Momentary forward
-  const int buttonPlayPause = 67;   // Auto-speed toggle, start/stop
-  const int buttonEQ = 9;           // Mute / Unmute
-  const int button0 = 22;           // Color sensor ON/OFF
-  const int button100plus = 25;     // Horn
-  const int button200plus = 13;     // Siren
-  const int button1 = 12;           // Play music 1
-  const int button2 = 24;           // Play music 2
-  const int button3 = 94;           // Play music 3
-  const int button4 = 8;            // Play music 4
-  const int button5 = 28;           // Play music 5
-  const int button6 = 90;           // Play music 6
-  const int button7 = 66;           // Play music 7
-  const int button8 = 82;           // Play music 8
-  const int button9 = 74;           // Battery Test
-
   #if DEBUG_IR_REMOTE
   // "const __FlashStringHelper*" is the type that F("...") strings actually have (see the F() macro
   // explanation in arduino-train-v2.ino). Returning this type instead of a normal "const char*"
@@ -171,6 +150,11 @@
   // switch so no other case's code runs afterward.
   void translateIR() {
     uint8_t code = irReceive();
+    if (criticalOvervoltageLatched) {
+      DBGLN_POWER_MANAGEMENT(F("Ignored IR command: critical overvoltage latch"));
+      return;
+    }
+
     #if DEBUG_IR_REMOTE
     if (code != 0 && !lastWasRepeat) {
       DBG_IR_REMOTE(F("Assigned action: "));
@@ -255,13 +239,10 @@
             decreaseStep();
             DBG_MOTOR(F("Manual Speed Down: "));
             DBGLN_MOTOR(Speed);
-            if (Speed == 0) {
-              Stop();
-              SetRGBColor(RgbColor::Red);
-            } else {
-              if (MotorDirection == 1) GoForward();
-              if (MotorDirection == 2) GoBackward();
-            }
+            // decreaseStep() -> applySpeedStep() already stopped or re-drove the motor at the new
+            // step, so only the status light needs updating here (a second GoForward()/GoBackward()
+            // call would just repeat the same I2C/PWM writes and debug output).
+            if (Speed == 0) SetRGBColor(RgbColor::Red);
           } else {
             DBGLN_IR_REMOTE(F("Ignored: Auto-speed active"));
           }
@@ -291,14 +272,11 @@
             increaseStep();
             DBG_MOTOR(F("Manual Speed Up: "));
             DBGLN_MOTOR(Speed);
-            if (MotorDirection == 1) {
-              GoForward();
-              SetRGBColor(RgbColor::White);
-            }
-            if (MotorDirection == 2) {
-              GoBackward();
-              SetRGBColor(RgbColor::Blue);
-            }
+            // increaseStep() -> applySpeedStep() already drives the motor in the stored direction,
+            // so only the direction status light needs setting here (calling GoForward()/
+            // GoBackward() again would repeat identical PWM writes and debug output).
+            if (MotorDirection == 1) SetRGBColor(RgbColor::White);
+            if (MotorDirection == 2) SetRGBColor(RgbColor::Blue);
           } else {
             DBGLN_IR_REMOTE(F("Ignored: Auto-speed active"));
           }
@@ -358,11 +336,19 @@
           if (AutoDistanceOnOff) {
             DBGLN_MOTOR(F("Driving started (auto-speed)"));
             SetRGBColor(RgbColor::White);
-            GoForward();
+            // SAFETY: do NOT command the motor here. The distance sensor was idle while auto mode
+            // was off, so the last stored reading may be minutes old ("stale") - driving on it
+            // could lurch the train straight into an obstacle that has since appeared. Instead:
+            MotorDirection = 1;                    // auto mode always drives forward
+            resetAutoDistanceState();              // clear any stale obstacle-stop latch
+            setDistanceSensorRangingActive(true);  // restart ranging + discard stale samples
+            // ...and let updateAutoDistanceSpeed() (called every loop) start the motor only after
+            // a fresh valid distance reading arrives.
             playPattern(pattern_double);
           } else {
             DBGLN_MOTOR(F("Driving stopped"));
             SetRGBColor(RgbColor::Red);
+            exitAutoDistanceMode(false);  // stop ranging + clear the obstacle latch (LED already off above)
             stopAndResetStepSelection();
             Speed = 0;
             playPattern(pattern_descend);
@@ -416,14 +402,15 @@
           playPattern(pattern_double);
           waitForPatternPlayback(500);
           uint16_t vIn = getBatteryVoltageSettledForStatus();
+          if (criticalOvervoltageLatched) return;
           int batteryPercent = get2SBatteryPercent(vIn);
-          DBG_VOLTAGE_METER(F("Battery Voltage: "));
-          DBG_VOLTAGE_METER(vIn / 1000);
-          DBG_VOLTAGE_METER(F("."));
-          DBGLN_VOLTAGE_METER((vIn % 1000) / 10);
-          DBG_VOLTAGE_METER(F("Battery level: "));
-          DBG_VOLTAGE_METER(batteryPercent);
-          DBGLN_VOLTAGE_METER(F("%"));
+          DBG_POWER_MANAGEMENT(F("Battery Voltage: "));
+          DBG_POWER_MANAGEMENT(vIn / 1000);
+          DBG_POWER_MANAGEMENT(F("."));
+          DBGLN_POWER_MANAGEMENT((vIn % 1000) / 10);
+          DBG_POWER_MANAGEMENT(F("Battery level: "));
+          DBG_POWER_MANAGEMENT(batteryPercent);
+          DBGLN_POWER_MANAGEMENT(F("%"));
           playVoltagePattern(batteryPercent);
           break;
         }

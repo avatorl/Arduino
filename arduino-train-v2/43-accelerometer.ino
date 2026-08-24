@@ -9,6 +9,13 @@
   // MPU-6050 accelerometer helper.
   // Like the other sensor helpers in this sketch, this is a minimal hand-written register-level
   // driver rather than a library, to keep flash and SRAM use down on the Nano.
+  // If you wanted to use the Adafruit MPU6050 library instead, the equivalent calls would be:
+  //   Adafruit_MPU6050 mpu;                       // ~= this whole struct
+  //   mpu.begin();                                 // ~= begin_I2C()
+  //   mpu.setAccelerometerRange(MPU6050_RANGE_2_G);// ~= the RegisterAccelConfig write in begin_I2C()
+  //   mpu.getEvent(&a, &g, &temp);                 // ~= readAcceleration() (accel part only)
+  //   mpu.enableSleep(true);                       // ~= sleep()
+  //   mpu.enableSleep(false);                      // ~= wake()
   struct TrainAccelerometerMPU6050 {
     static const uint8_t RegisterWhoAmI = 0x75;
     static const uint8_t RegisterPowerManagement1 = 0x6B;
@@ -17,8 +24,11 @@
 
     uint8_t address = mpu6050Address;
 
+    // Probe and configure the chip (Adafruit library equivalent: mpu.begin()).
+    // Note: the shared I2C bus itself is configured once in initI2cBus() in arduino-train-v2.ino,
+    // not here. Reads WHO_AM_I to verify the right chip answers, clears the sleep bit the MPU-6050
+    // powers up with (register 0x6B), and selects the +/-2 g accelerometer range.
     bool begin_I2C() {
-      Wire.begin();
       address = mpu6050Address;
 
       uint8_t whoAmI = 0;
@@ -28,6 +38,21 @@
       return writeRegister(RegisterAccelConfig, mpu6050AccelConfig);
     }
 
+    // Put the chip into its low-power sleep mode (Adafruit equivalent: mpu.enableSleep(true)).
+    // Bit 6 of PWR_MGMT_1 is the SLEEP bit; setting it drops the MPU-6050's supply current from
+    // roughly 3.8 mA to about 5 uA - worthwhile during the train's idle sleep and shutdown.
+    bool sleep() {
+      return writeRegister(RegisterPowerManagement1, 0x40);
+    }
+
+    // Wake the chip from sleep mode (Adafruit equivalent: mpu.enableSleep(false)).
+    // Clearing PWR_MGMT_1 resumes measurements; the configured accelerometer range is kept.
+    bool wake() {
+      return writeRegister(RegisterPowerManagement1, 0x00);
+    }
+
+    // Read the three raw acceleration axes in one burst
+    // (Adafruit library equivalent: the accelerometer part of mpu.getEvent()).
     bool readAcceleration(int16_t* x, int16_t* y, int16_t* z) {
       uint8_t bytes[6] = { 0 };
       if (!readRegisters(RegisterAccelXoutHigh, bytes, sizeof(bytes))) return false;
@@ -74,29 +99,68 @@
   unsigned long lastAccelerometerDebugMs = 0;
   bool accelerometerPreviousForwardSampleValid = false;
   int32_t accelerometerPreviousForwardRaw = 0;
+  // When to next re-probe an unresponsive MPU-6050. 0 means "no retry scheduled" (either the
+  // sensor is healthy, or it was never scheduled). A single failed read must not permanently
+  // disable the tilt/crash protection - a loose wire or one I2C glitch would otherwise silently
+  // strip the train of a safety feature until the next power cycle.
+  unsigned long accelerometerNextRetryMs = 0;
 
   // Probe the MPU-6050 and report whether accelerometer-based safety can run.
   void initAccelerometerHardware() {
     accelerometerDetected = accelerometer.begin_I2C();
     if (accelerometerDetected) {
+      accelerometerNextRetryMs = 0;
       DBGLN_ACCELEROMETER(F("MPU-6050 ready"));
     } else {
+      // Not found at boot: keep re-probing periodically (see updateAccelerometerSafety) in case
+      // the connection is intermittent rather than absent.
+      accelerometerNextRetryMs = millis() + mpu6050RetryEveryMs;
       DBGLN_ACCELEROMETER(F("MPU-6050 not detected; accelerometer safety disabled"));
     }
   }
 
+  // Park the MPU-6050 in low-power sleep / wake it again. Thin global wrappers so tabs compiled
+  // before this one (30-lights-and-sounds.ino, 50-power-management.ino - see the forward
+  // declarations in arduino-train-v2.ino) can call the driver during idle sleep and shutdown.
+  void sleepAccelerometer() {
+    if (accelerometerDetected) accelerometer.sleep();
+  }
+  void wakeAccelerometer() {
+    if (accelerometerDetected) accelerometer.wake();
+  }
+
   void updateAccelerometerSafety() {
     const unsigned long now = millis();
-    if (!accelerometerDetected || (now - lastAccelerometerReadMs) < mpu6050ReadEveryMs) return;
+    if (!accelerometerDetected) {
+      // Recovery path: periodically re-probe an accelerometer that failed at boot or mid-run, so
+      // one bad read does not permanently disable the tilt/crash safety net. A full begin_I2C()
+      // is used (not just a read) because the chip may have rebooted back into its power-on sleep
+      // state and needs reconfiguring.
+      if (accelerometerNextRetryMs != 0 && (long)(now - accelerometerNextRetryMs) >= 0) {
+        if (accelerometer.begin_I2C()) {
+          accelerometerDetected = true;
+          accelerometerNextRetryMs = 0;
+          accelerometerPreviousForwardSampleValid = false;  // old motion history is stale now
+          DBGLN_ACCELEROMETER(F("MPU-6050 recovered; accelerometer safety re-enabled"));
+        } else {
+          accelerometerNextRetryMs = now + mpu6050RetryEveryMs;
+        }
+      }
+      return;
+    }
+    if ((now - lastAccelerometerReadMs) < mpu6050ReadEveryMs) return;
     lastAccelerometerReadMs = now;
 
     int16_t sampleX = 0;
     int16_t sampleY = 0;
     int16_t sampleZ = 0;
     if (!accelerometer.readAcceleration(&sampleX, &sampleY, &sampleZ)) {
+      // Mark the sensor unavailable for now, but schedule a re-probe instead of giving up: this
+      // is a temporary suspension, not the permanent disable it used to be.
       accelerometerDetected = false;
       accelerometerTiltTiming = false;
-      DBGLN_ACCELEROMETER(F("MPU-6050 read failed; accelerometer safety disabled"));
+      accelerometerNextRetryMs = now + mpu6050RetryEveryMs;
+      DBGLN_ACCELEROMETER(F("MPU-6050 read failed; retrying in a few seconds"));
       return;
     }
 

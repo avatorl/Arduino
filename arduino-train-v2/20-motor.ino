@@ -6,25 +6,33 @@
 
   constexpr int AUTO_DISTANCE_INVALID = -1;
 
+  // Obstacle stop latch for auto-distance hysteresis (see motorVoltageFromDistance() below).
+  // true  = the train stopped because an obstacle came closer than AUTO_DISTANCE_STOP and must stay
+  //         stopped until the obstacle clears past AUTO_DISTANCE_RESTART.
+  // false = normal driving; distance simply scales the speed.
+  // The gap between STOP (8 cm) and RESTART (11 cm) prevents rapid stop/start oscillation when an
+  // obstacle sits exactly at one threshold (sensor noise would otherwise flip the decision every
+  // reading, jerking the train). Reset via resetAutoDistanceState() whenever auto mode is toggled.
+  bool autoObstacleStopLatched = false;
+
   // Map obstacle distance to a target motor voltage for auto-distance mode.
   // This function turns a distance reading into a target voltage using simple linear interpolation
-  // ("ramp up smoothly between two points") instead of a lookup table: closer than stopDistanceCm or
-  // inside the stop/restart dead zone -> 0 (full stop); farther than maxSpeedDistanceCm -> the
-  // maximum allowed voltage; in between, the target voltage rises in a straight line from minMotorMv
-  // up to maxMotorMv as the obstacle gets farther away. All the math is done in integers (no
-  // floating point) since AVR chips are slow at floating-point arithmetic: "spanV"/"spanD" are the
-  // total voltage/distance ranges, and "(spanD / 2U)" added before dividing is a standard
-  // integer-rounding trick (rounds to the nearest whole number instead of always rounding down).
+  // ("ramp up smoothly between two points") instead of a lookup table: at or below restartDistanceCm
+  // -> crawl at minMotorMv (the stop decision itself is made by the caller's hysteresis latch, not
+  // here); farther than maxSpeedDistanceCm -> the maximum allowed voltage; in between, the target
+  // voltage rises in a straight line from minMotorMv up to maxMotorMv as the obstacle gets farther
+  // away. All the math is done in integers (no floating point) since AVR chips are slow at
+  // floating-point arithmetic: "spanV"/"spanD" are the total voltage/distance ranges, and
+  // "(spanD / 2U)" added before dividing is a standard integer-rounding trick (rounds to the
+  // nearest whole number instead of always rounding down).
   uint16_t motorVoltageFromDistanceMm(
     int distanceCm,
-    int stopDistanceCm,
     int restartDistanceCm,
     int maxSpeedDistanceCm,
     uint16_t minMotorMv,
     uint16_t maxMotorMv
   ) {
-    if (distanceCm < stopDistanceCm) return 0;
-    if (distanceCm <= restartDistanceCm) return 0;
+    if (distanceCm <= restartDistanceCm) return minMotorMv;
 
     if (distanceCm < maxSpeedDistanceCm) {
       const uint16_t spanV = (uint16_t)(maxMotorMv - minMotorMv);
@@ -39,9 +47,21 @@
   }
 
   // Disable auto-distance mode and clear its indicator.
+  // Also stops VL53L1X continuous ranging (the sensor is only needed while auto mode is active,
+  // so this saves power and I2C traffic) and clears the obstacle stop latch so the next auto
+  // session starts from a clean state.
   void exitAutoDistanceMode(bool clearIndicator) {
     AutoDistanceOnOff = false;
+    resetAutoDistanceState();
+    setDistanceSensorRangingActive(false);
     if (clearIndicator) SetGreenLightValue(0);
+  }
+
+  // Clear the obstacle stop latch used by motorVoltageFromDistance()'s hysteresis.
+  // Called whenever auto-distance mode is entered or exited so a stale "stopped by obstacle"
+  // decision from a previous session cannot leak into a new one.
+  void resetAutoDistanceState() {
+    autoObstacleStopLatched = false;
   }
 
   // Stop motor and reset manual speed step to 0.
@@ -184,14 +204,25 @@
   // ================================================================================================
   // Auto-distance speed control
   // ================================================================================================
-  // Convert obstacle distance into a motor-voltage target with a dead zone near obstacles.
+  // Convert obstacle distance into a motor-voltage target with stop/restart hysteresis.
   // Map obstacle distance to a target motor voltage.
+  // Hysteresis (the reason STOP and RESTART are two different distances):
+  //   - While driving: an obstacle closer than AUTO_DISTANCE_STOP (8 cm) latches a full stop.
+  //   - While stopped by the latch: the train stays stopped until the obstacle clears past
+  //     AUTO_DISTANCE_RESTART (11 cm); readings inside the 8-11 cm band keep the previous decision.
+  //   - While driving inside the 8-11 cm band (obstacle slowly approaching), the train crawls at
+  //     the minimum voltage until the obstacle either clears or crosses the 8 cm stop line.
+  // Without this band the train would oscillate stop/start when an obstacle sits near a single
+  // threshold, because sensor noise flips consecutive readings above/below it.
   uint16_t motorVoltageFromDistance(int distance) {
+    if (distance < AUTO_DISTANCE_STOP) autoObstacleStopLatched = true;         // too close -> latch stop
+    else if (distance > AUTO_DISTANCE_RESTART) autoObstacleStopLatched = false; // clear -> release latch
+    if (autoObstacleStopLatched) return 0;
+
     uint16_t minV = min(MAX_SAFE_MOTOR_MV, voltageSteps[1]);        // ≈3.5V
     uint16_t maxV = min(NORMAL_MAX_MOTOR_MV, voltageSteps[NORMAL_MAX_SPEED_STEP]);  // ≈6.0V
     return motorVoltageFromDistanceMm(
       distance,
-      AUTO_DISTANCE_STOP,
       AUTO_DISTANCE_RESTART,
       AUTO_DISTANCE_MAX_SPEED,
       minV,
@@ -242,22 +273,29 @@
 
   // Smooth large speed changes so auto mode does not jerk the drivetrain.
   // Ramp the motor toward a requested speed.
+  // SAFETY: a stop request (targetSpeed == 0) is executed IMMEDIATELY, before the ramp-delay gate
+  // below. The gate exists only to pace gradual speed changes (one rampStep every rampDelay ms);
+  // letting it delay an emergency stop by up to rampDelay (80 ms) would add several centimetres of
+  // travel toward an obstacle at full speed.
   void updateMotorSpeed(int targetSpeed) {
+    if (targetSpeed == 0) {
+      // Skip the repeated Stop() side effects (debug spam, boost bookkeeping) once already stopped.
+      if (Speed != 0 || motorDrivePending) {
+        if (AutoDistanceOnOff && pendingMotorStopReason == nullptr) {
+          pendingMotorStopReason = F("auto: obstacle too close");
+        }
+        Speed = 0;
+        Stop();
+      }
+      return;
+    }
+
     unsigned long now = millis();
     if (now - lastRamp < rampDelay) return;
     lastRamp = now;
 
     if (Speed < targetSpeed) Speed = min(Speed + rampStep, targetSpeed);
     else if (Speed > targetSpeed) Speed = max(Speed - rampStep, targetSpeed);
-
-    if (targetSpeed == 0) {
-      if (AutoDistanceOnOff && pendingMotorStopReason == nullptr) {
-        pendingMotorStopReason = F("auto: obstacle too close");
-      }
-      Speed = 0;
-      Stop();
-      return;
-    }
 
     if (Speed == 0) Stop();
     else GoForward();  // auto always drives through the same direction-change guard as manual mode

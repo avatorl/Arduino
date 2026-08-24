@@ -24,9 +24,11 @@
   //   VL53L1X sensor;                        // ~= this whole struct
   //   sensor.init();                          // ~= init() below
   //   sensor.setDistanceMode(VL53L1X::Short); // ~= setDistanceModeShort()
-  //   sensor.setROISize(4, 4);                // ~= setRoi()
+  //   sensor.setROISize(8, 4);                // ~= setRoi()
   //   sensor.startContinuous(50);             // ~= startContinuous()
-  //   sensor.read();                          // ~= readRangeContinuousMillimeters()
+  //   sensor.stopContinuous();                // ~= stopContinuous()
+  //   sensor.dataReady();                     // ~= sampleReady()
+  //   sensor.read(false);                     // ~= readRangeContinuousMillimeters() (non-blocking)
 
   // ST's default configuration block, registers 0x2D..0x87 inclusive (91 bytes).
   // "PROGMEM" keeps this table in flash instead of copying it into SRAM at startup, which matters
@@ -56,6 +58,12 @@
     bool didTimeout = false;
     bool lastReadValid = false;
     unsigned long timeoutStartMs = 0;
+    // Cached data-ready polarity, filled in once by init(). The sensor's GPIO_HV_MUX__CTRL register
+    // (0x0030) decides whether "measurement ready" reads as bit value 0 or 1 in register 0x0031.
+    // Reading it once here (instead of on every poll, as ST's ULD does) halves the I2C traffic of
+    // every readiness check. It only changes when the configuration block is rewritten, i.e. in
+    // init(), so caching is safe.
+    uint8_t dataReadyPolarity = 1;
 
     void setTimeout(uint16_t timeoutMs) {
       ioTimeoutMs = timeoutMs;
@@ -117,6 +125,16 @@
         if (!writeReg((uint16_t)(0x002D + i), pgm_read_byte(&kVl53l1xDefaultConfig[i]))) {
           return false;
         }
+      }
+
+      // Cache the data-ready polarity now that the configuration block (which fixes register
+      // 0x0030) has been written. sampleReady() and waitForDataReady() below both depend on this.
+      // Watch the "!" in the polarity line: dropping it inverts the test, and every readiness
+      // check afterwards would either always time out or return stale data.
+      {
+        uint8_t mux = 0;
+        if (!readRegs(0x0030, &mux, 1)) return false;
+        dataReadyPolarity = (uint8_t)(!((mux >> 4) & 0x01));
       }
 
       // Required one-off calibration. This is NOT part of the configuration block, and skipping it
@@ -206,11 +224,33 @@
       writeReg(0x0087, 0x40);
     }
 
+    // Stop continuous ranging (Pololu library equivalent: sensor.stopContinuous()).
+    // Used when auto-distance mode is switched off: the sensor keeps its configuration and address
+    // and can be restarted instantly with startContinuous(), but stops measuring, which saves
+    // power (~20 mA during ranging) and keeps the I2C bus quiet for the other devices.
+    bool stopContinuous() {
+      lastReadValid = false;
+      return writeReg(0x0087, 0x00);
+    }
+
+    // Non-blocking check whether a new measurement is waiting to be read
+    // (Pololu library equivalent: sensor.dataReady()).
+    // Costs a single 1-byte register read (~50 us at 400 kHz) and returns immediately, unlike the
+    // old blocking wait that could busy-spin for up to 50 ms inside loop(). The caller polls this
+    // each loop pass and only calls readRangeContinuousMillimeters() once it returns true.
+    bool sampleReady() {
+      uint8_t status = 0;
+      if (!readRegs(0x0031, &status, 1)) return false;  // I2C error counts as "nothing to read"
+      return (status & 0x01) == dataReadyPolarity;
+    }
+
     // Read the latest distance in millimetres. Returns 65535 and leaves lastRangeReadValid() false
     // when the reading is unusable, matching what the previous driver did.
+    // (Pololu library equivalent: sensor.read(false) - the non-blocking form.)
+    // IMPORTANT: only call this after sampleReady() has returned true; this function no longer
+    // waits for a measurement itself, so calling it early would read stale or half-updated data.
     uint16_t readRangeContinuousMillimeters() {
       lastReadValid = false;
-      if (!waitForDataReady()) return 65535;
 
       uint8_t status = 0;
       uint8_t range[2] = { 0, 0 };
@@ -228,12 +268,6 @@
 
       lastReadValid = true;
       return ((uint16_t)range[0] << 8) | range[1];
-    }
-
-    bool timeoutOccurred() {
-      bool timedOut = didTimeout;
-      didTimeout = false;
-      return timedOut;
     }
 
     bool lastRangeReadValid() const {
@@ -291,16 +325,10 @@
     }
 
     // Poll until the sensor says a measurement is ready.
-    // Watch the "!" in the polarity line: dropping it inverts the test, and the loop then either
-    // spins until it times out or returns stale data.
+    // This BLOCKING wait is only used during the one-off calibration inside init(), where waiting
+    // is correct and simple. Normal operation uses the non-blocking sampleReady() instead so
+    // loop() is never stalled. Relies on dataReadyPolarity already being cached by init().
     bool waitForDataReady() {
-      uint8_t mux = 0;
-      if (!readRegs(0x0030, &mux, 1)) {
-        didTimeout = true;
-        return false;
-      }
-      const uint8_t polarity = (uint8_t)(!((mux >> 4) & 0x01));
-
       startTimeout();
       for (;;) {
         uint8_t status = 0;
@@ -308,7 +336,7 @@
           didTimeout = true;
           return false;
         }
-        if ((status & 0x01) == polarity) return true;
+        if ((status & 0x01) == dataReadyPolarity) return true;
         if (hasTimedOut()) {
           didTimeout = true;
           return false;
@@ -329,7 +357,7 @@
 
     // --- 16-bit-register access primitives -------------------------------------------------
     // Every VL53L1X transaction sends the register address as two bytes, high byte first. This is
-    // the fundamental difference from the VL53L1X, whose registers were single bytes.
+    // the fundamental difference from the VL53L0X, whose registers were single bytes.
     bool writeRegAt(uint8_t targetAddress, uint16_t reg, uint8_t value) {
       Wire.beginTransmission(targetAddress);
       Wire.write((uint8_t)(reg >> 8));
@@ -398,9 +426,25 @@
   TrainDistanceSensorVL53L1X distanceTof;
   bool distanceTofDetected = false;
   bool distanceTofFaultLatched = false;
-  uint8_t distanceTofConsecutiveFailures = 0;
   unsigned long lastTofReadMs = 0;
   unsigned long lastGoodTofReadMs = 0;
+  // When continuous ranging last (re)started. Used by the startup-grace check in
+  // getDistanceReading(): if the sensor never produces a single valid reading within
+  // tofStartupGraceMs of this moment, a fault is latched instead of waiting forever.
+  unsigned long tofRangingStartedMs = 0;
+  // Whether continuous ranging is currently running. Ranging is active only while auto-distance
+  // mode is on (see setDistanceSensorRangingActive()); the sensor stays initialized but idle the
+  // rest of the time to save power and I2C traffic.
+  bool tofRangingActive = false;
+
+  // Forget all buffered distance samples so the median filter starts fresh.
+  // Called whenever ranging (re)starts: samples taken minutes ago (before auto mode was last
+  // switched off) must never influence the first drive decision of a new auto session.
+  void resetDistanceFilter() {
+    bufferIndex = 0;
+    bufferFilled = false;
+    Distance = 0;
+  }
 
   // Sort a small sample buffer in place and return its median element.
   // Uses a simple "selection sort" (fine for the very small AUTO_SAMPLES_FOR_MEDIAN buffer size used
@@ -449,7 +493,7 @@
 
     distanceTofFaultLatched = true;
     distanceTofDetected = false;
-    distanceTofConsecutiveFailures = maxConsecutiveTofFailures;
+    tofRangingActive = false;
     Distance = 0;
     pendingMotorStopReason = F("auto: no response from distance sensor");
     exitAutoDistanceMode();
@@ -463,22 +507,57 @@
   }
 
   // Return the latest filtered distance in cm.
+  // Non-blocking by design: instead of waiting inside the driver for a measurement (which used to
+  // stall loop() for up to 50 ms), this asks the sensor "is a new sample ready?" (one fast I2C
+  // read) and simply returns the previous filtered value when nothing new has arrived yet.
+  // Failure policy, from mildest to most severe:
+  //   1. No new sample yet, last good reading is recent (within tofFailureGraceMs) -> keep using it.
+  //   2. No good reading for longer than the grace period -> latch a fault and stop the train.
+  //   3. Never had a good reading and tofStartupGraceMs has passed since ranging started (sensor
+  //      present on I2C but not measuring, e.g. optically blocked or miswired) -> latch a fault.
   int getDistanceReading() {
-    if (!distanceTofDetected) {
+    if (!distanceTofDetected || !tofRangingActive) {
       handleDistanceSensorFault();
       return AUTO_DISTANCE_INVALID;
     }
 
     unsigned long now = millis();
     if (now - lastTofReadMs < tofReadEveryMs) {
+      // Not time for a new sensor read yet; serve the cached value. An empty filter (fresh ranging
+      // start, no samples yet) reports "invalid" so auto mode waits instead of driving blind.
       if (!bufferFilled && bufferIndex == 0) return AUTO_DISTANCE_INVALID;
       return Distance;
+    }
+
+    if (!distanceTof.sampleReady()) {
+      // No new measurement waiting. This is normal for a poll or two (the sensor's 50 ms
+      // measurement cycle drifts against our 50 ms read cycle), so only escalate when it persists.
+      if (lastGoodTofReadMs == 0) {
+        // Still waiting for the very first valid reading since ranging started.
+        if (now - tofRangingStartedMs > tofStartupGraceMs) {
+          handleDistanceSensorFault();  // sensor never delivered anything usable
+          return AUTO_DISTANCE_INVALID;
+        }
+        pendingMotorStopReason = F("auto: invalid distance sensor");
+        return AUTO_DISTANCE_INVALID;
+      }
+      if ((now - lastGoodTofReadMs) <= tofFailureGraceMs) {
+        return Distance;  // recent good value still trustworthy
+      }
+      handleDistanceSensorFault();
+      return AUTO_DISTANCE_INVALID;
     }
     lastTofReadMs = now;
 
     uint16_t rawMm = distanceTof.readRangeContinuousMillimeters();
     if (!distanceTof.lastRangeReadValid()) {
+      // A sample WAS ready but its range status marked it unusable (target too weak/ambiguous).
+      // Apply the same escalation ladder as the "no sample" branch above.
       if (lastGoodTofReadMs == 0) {
+        if (now - tofRangingStartedMs > tofStartupGraceMs) {
+          handleDistanceSensorFault();
+          return AUTO_DISTANCE_INVALID;
+        }
         pendingMotorStopReason = F("auto: invalid distance sensor");
         return AUTO_DISTANCE_INVALID;
       }
@@ -489,12 +568,16 @@
       return AUTO_DISTANCE_INVALID;
     }
 
-    distanceTofConsecutiveFailures = 0;
     distanceTofFaultLatched = false;
     lastGoodTofReadMs = now;
 
+    // Convert mm -> cm, then clamp into the 1..AUTO_DISTANCE_MAX_SPEED range the auto logic uses.
+    // SAFETY: a point-blank reading (0-9 mm becomes 0 cm) must clamp to the CLOSEST value (1 cm =
+    // obstacle touching the sensor), never to the far end - an earlier version mapped it to
+    // AUTO_DISTANCE_MAX_SPEED, which told the train "50 cm of clear track" while it was pressed
+    // against an obstacle.
     int raw = (int)(rawMm / 10U);
-    if (raw <= 0) raw = AUTO_DISTANCE_MAX_SPEED;
+    if (raw < 1) raw = 1;
     if (raw > AUTO_DISTANCE_MAX_SPEED) raw = AUTO_DISTANCE_MAX_SPEED;
 
     int median = pushDistanceSampleAndGetMedian(raw);
@@ -522,11 +605,14 @@
     // this delay is the only thing guaranteeing it is awake before the address write below, and
     // reading a status register here to check would be ambiguous with two chips on that address.
     delay(10);
-    startDistanceSensorRanging(true);
+    startDistanceSensorRanging();
   }
 
-  // (Re-)configure and start continuous VL53L1X ranging.
-  bool startDistanceSensorRanging(bool reinitializeSensor) {
+  // (Re-)configure the VL53L1X after power-up/XSHUT reset, and validate it end to end.
+  // Always performs the full init (address move, boot poll, configuration, calibration). Ranging
+  // is then left running only if auto-distance mode is currently on; otherwise the sensor is
+  // parked idle-but-ready (see setDistanceSensorRangingActive()).
+  bool startDistanceSensorRanging() {
     distanceTof.setTimeout(distanceTofTimeoutMs);
 
     // Ordering below is the correctness rule for the shared bus: move the sensor off 0x29 first,
@@ -554,7 +640,7 @@
     distanceTof.logModelId();
     #endif
 
-    if (reinitializeSensor && !distanceTof.init()) {
+    if (!distanceTof.init()) {
       distanceTofDetected = false;
       #if DEBUG_DISTANCE_SENSOR
       distanceTof.logStartupI2cState(F("VL53L1X startup: initialization failure"));
@@ -576,12 +662,43 @@
       return false;
     }
 
-    distanceTof.startContinuous(distanceTofContinuousPeriodMs);
     distanceTofDetected = true;
     distanceTofFaultLatched = false;
-    distanceTofConsecutiveFailures = 0;
+    resetDistanceFilter();
     lastGoodTofReadMs = 0;
     lastTofReadMs = 0;
+    // Only measure while auto-distance mode actually needs readings; otherwise leave the sensor
+    // configured but idle (saves ~20 mA and I2C traffic). setDistanceSensorRangingActive(true)
+    // starts it the moment the user enables auto mode.
+    if (AutoDistanceOnOff) {
+      distanceTof.startContinuous(distanceTofContinuousPeriodMs);
+      tofRangingStartedMs = millis();
+      tofRangingActive = true;
+    } else {
+      tofRangingActive = false;
+    }
     DBGLN_DISTANCE_SENSOR(F("VL53L1X ready"));
     return true;
+  }
+
+  // Start or stop VL53L1X continuous ranging without a full re-init.
+  // Called from 10-ir-remote.ino / 20-motor.ino when auto-distance mode is toggled. Starting also
+  // wipes the median filter and timing state so the first drive decision of the new session is
+  // based only on fresh measurements, never on samples taken before the mode was last off.
+  void setDistanceSensorRangingActive(bool active) {
+    if (!distanceTofDetected) return;  // nothing to control (never found, or fault-latched)
+    if (active == tofRangingActive) return;  // already in the requested state
+    if (active) {
+      resetDistanceFilter();
+      lastGoodTofReadMs = 0;
+      lastTofReadMs = 0;
+      distanceTof.startContinuous(distanceTofContinuousPeriodMs);
+      tofRangingStartedMs = millis();
+      tofRangingActive = true;
+      DBGLN_DISTANCE_SENSOR(F("VL53L1X ranging started"));
+    } else {
+      distanceTof.stopContinuous();
+      tofRangingActive = false;
+      DBGLN_DISTANCE_SENSOR(F("VL53L1X ranging stopped"));
+    }
   }

@@ -349,9 +349,14 @@
     digitalWrite(pinMotorSleep, LOW);
     digitalWrite(pinVL53L1X_XSHUT, LOW);
     distanceTofDetected = false;
+    sleepAccelerometer();  // Park the MPU-6050 in its ~5 uA sleep mode; nothing will read it again.
     powerDownColorSensorCore();
     digitalWrite(pinColorSensorLED, colorSensorLEDOffLevel);
-    SetRearRedLight(false);
+    // After a critical overvoltage the rear red indicator intentionally stays ON during the final
+    // sleep, so the user can still see WHY the train died until power is removed. The MCP23008
+    // keeps driving its outputs while the Nano sleeps. For ordinary low-battery shutdowns the
+    // light goes off to save the pack.
+    SetRearRedLight(criticalOvervoltageLatched);
     SetGreenLightValue(0);
     SetRGBLight(false, false, false, 0);
     if (irReceiverStarted) {

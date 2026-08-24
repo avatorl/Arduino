@@ -34,12 +34,10 @@
 
     uint8_t address = DefaultAddress;
 
+    // Probe and configure the sensor over I2C.
+    // Note: the shared I2C bus itself (Wire.begin, clock speed, timeout) is configured once in
+    // initI2cBus() in arduino-train-v2.ino before any device driver runs - not here.
     bool begin_I2C(uint8_t i2cAddress = DefaultAddress) {
-      Wire.begin();
-      #if defined(WIRE_HAS_TIMEOUT)
-      Wire.setWireTimeout(3000, true);
-      Wire.clearWireTimeoutFlag();
-      #endif
       address = i2cAddress;
 
       uint8_t deviceId = 0;
@@ -126,13 +124,14 @@
     }
   };
 
-  // D4 is dedicated to the TCS34725 breakout LED control input in this revision.
+  // A2 (pinColorSensorLED in config.h) is dedicated to the TCS34725 breakout LED control input in
+  // this revision. A2 works fine as a digital output; only A6/A7 on the Nano are analog-input-only.
   TrainColorSensorTCS34725 colorSensor;
   bool colorSensorDetected = false;
 
   // TCS34725 Low-Power Sleep / Power-Down Notes:
   // - The sensor IC has an internal sleep/power-down state (~1-2 uA) controlled via I2C.
-  // - Turning off the onboard LED via D4 saves ~15-20 mA (the dominant current draw).
+  // - Turning off the onboard LED via A2 saves ~15-20 mA (the dominant current draw).
   // - setColorSensorEnabled(false) powers down both the LED and the sensor core.
 
   // Color-sensor sampling and classification state.

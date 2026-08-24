@@ -51,7 +51,7 @@
 // ENABLE_EEPROM_LOGGING: it only takes the default value shown here if nothing else already
 // defined it first.
 #ifndef DEBUG_IR_REMOTE
-#define DEBUG_IR_REMOTE 1
+#define DEBUG_IR_REMOTE 0
 #endif
 #ifndef DEBUG_MOTOR
 #define DEBUG_MOTOR 0
@@ -63,7 +63,7 @@
 #define DEBUG_DISTANCE_SENSOR 0
 #endif
 #ifndef DEBUG_TILT_SENSOR
-#define DEBUG_TILT_SENSOR 1
+#define DEBUG_TILT_SENSOR 0
 #endif
 #ifndef DEBUG_ACCELEROMETER
 #define DEBUG_ACCELEROMETER 0
@@ -76,19 +76,33 @@
 #define ENABLE_VL53L0X_LEGACY_DRIVER 0
 #endif
 #ifndef DEBUG_POWER_MANAGEMENT
-#define DEBUG_POWER_MANAGEMENT 1
+#define DEBUG_POWER_MANAGEMENT 0
 #endif
 #ifndef DEBUG_LEDS
 #define DEBUG_LEDS 0
 #endif
 #ifndef DEBUG_SOUND
-#define DEBUG_SOUND 1
+#define DEBUG_SOUND 0
 #endif
 #ifndef DEBUG_EEPROM
-#define DEBUG_EEPROM 1
+#define DEBUG_EEPROM 0
 #endif
+// Bench-testing switch for running the train from a regulated 5 V supply instead of the 2S pack.
+// Unit: 1 = TESTING build, 0 = PRODUCTION build (normal operation on the 2S 18650 battery).
+// When set to 1 the preprocessor completely removes the real battery measurement AND every
+// low-battery warning/shutdown check from the compiled program: the code simply assumes a constant
+// 5000 mV supply, because a bench 5 V source would otherwise look like a deeply discharged 2S pack
+// and shut the train down immediately. None of this testing behavior exists in the production
+// build - with 0 the compiler never even sees the testing code paths (see the
+// "#if DISABLE_VOLTAGE_METERING" blocks in 50-power-management.ino and arduino-train-v2.ino).
+// Wrong value effect: shipping a build with 1 leaves the train with no battery protection at all.
 #ifndef DISABLE_VOLTAGE_METERING
-#define DISABLE_VOLTAGE_METERING 1  // Set to 1 to disable voltage metering and assume 5.0V constant (for testing with 5V power source). Set to 0 to enable voltage metering (normal operation).
+#define DISABLE_VOLTAGE_METERING 0
+#endif
+#if DISABLE_VOLTAGE_METERING
+// #warning makes the compiler print this note in the build output on every compile, so a testing
+// build can never be created silently by accident.
+#warning "DISABLE_VOLTAGE_METERING=1: TESTING build - battery metering and low-voltage protection are compiled out!"
 #endif
 
 // --- I2C Addresses ---
@@ -128,7 +142,7 @@ constexpr int pinTiltSensor = 9;
 constexpr int pinBuzzer = 12;
 // D13 - unused (built-in LED)
 
-// --- MCP23017 expander pin mapping ---
+// --- MCP23008 expander pin mapping ---
 constexpr uint8_t led1RedExpanderPin = 0;
 constexpr uint8_t led1GreenExpanderPin = 1;
 constexpr uint8_t led1BlueExpanderPin = 2;
@@ -175,7 +189,14 @@ constexpr uint8_t BOOST_SPEED_STEP = 4;              // Extra manual step reserv
 constexpr uint16_t voltageSteps[] = { 0, 3500, 4500, 6000, 7000 }; // Requested motor mV for steps 0..4.
 constexpr int rampStep = 5;                          // PWM change per auto-speed ramp update.
 constexpr unsigned long rampDelay = 80UL;            // Delay between ramp steps in auto mode.
-constexpr int AUTO_SAMPLES_FOR_MEDIAN = 5;           // Distance samples kept for median filtering.
+// Median of 3 keeps single-sample glitches out while reacting one full sample sooner than a
+// median of 5 (about 100 ms faster at the 50 ms read period) - important for a short DUPLO train
+// approaching an obstacle at speed.
+constexpr int AUTO_SAMPLES_FOR_MEDIAN = 3;           // Distance samples kept for median filtering.
+// STOP and RESTART form a hysteresis band (see motorVoltageFromDistance() in 20-motor.ino):
+// the train stops when an obstacle comes closer than STOP and will not move again until the
+// obstacle has cleared past RESTART. The gap prevents rapid stop/start oscillation when an
+// obstacle sits right at the boundary.
 constexpr int AUTO_DISTANCE_STOP = 8;                // Stop auto drive when obstacle is closer than this (cm).
 constexpr int AUTO_DISTANCE_RESTART = 11;            // Start moving again once obstacle clears this distance (cm).
 constexpr int AUTO_DISTANCE_MAX_SPEED = 50;          // Distance at which auto mode may request full normal speed (cm).
@@ -248,14 +269,20 @@ constexpr uint32_t distanceTofContinuousPeriodMs = 50UL; // VL53L1X continuous-m
 // Smaller ROI = narrower cone = better floor and side-wall rejection, but shorter range.
 // Unit: SPADs on the sensor's 16x16 array. The driver clamps width/height to 4..16.
 // Safe change: 4x4 is roughly a 15 degree cone, 16x16 is the full ~27 degrees.
+// The 8-wide x 4-tall window below gives a cone that is wide horizontally (~15-20 degrees, so a
+// DUPLO-width obstacle is still seen when the track curves) but stays short vertically (so the
+// sensor does not stare at the floor in front of the train or at the ceiling).
 // Wrong value effect: a centre far from 199 combined with a small ROI can push the window off the
 // SPAD array, which yields range status 13 and no usable readings at all.
-constexpr uint8_t distanceTofRoiWidth = 4;
-constexpr uint8_t distanceTofRoiHeight = 4;
+constexpr uint8_t distanceTofRoiWidth = 8;             // Horizontal SPADs: wide to cover curves.
+constexpr uint8_t distanceTofRoiHeight = 4;            // Vertical SPADs: short to reject the floor.
 constexpr uint8_t distanceTofRoiCenterSpad = 199;      // 199 is the array's optical centre.
 constexpr unsigned long tofReadEveryMs = 50UL;         // How often the sketch consumes a ToF reading.
-constexpr uint8_t maxConsecutiveTofFailures = 3;       // Latch a distance fault after this many misses.
-constexpr unsigned long tofFailureGraceMs = 250UL;     // Brief grace period before treating misses as invalid.
+constexpr unsigned long tofFailureGraceMs = 250UL;     // Keep using the last good reading for this long before declaring a fault.
+// If the sensor never delivers a single valid reading within this time after ranging starts,
+// something is wrong (loose wire, dead sensor) and a distance fault is latched instead of the
+// train waiting forever with no obstacle protection.
+constexpr unsigned long tofStartupGraceMs = 1000UL;
 
 // Tilt-sensor debounce. Increase if the sensor chatters, decrease if stop detection feels slow.
 constexpr unsigned long TILT_STABLE_MS = 1000UL;
@@ -263,6 +290,9 @@ constexpr unsigned long TILT_QUIET_MS = 500UL;
 
 // MPU-6050 accelerometer sampling and safety thresholds.
 constexpr unsigned long mpu6050ReadEveryMs = 20UL;
+// If an accelerometer read fails (loose wire, I2C glitch) the sketch does not give up forever:
+// it re-probes the chip this often and resumes tilt/crash protection as soon as it answers again.
+constexpr unsigned long mpu6050RetryEveryMs = 5000UL;
 constexpr uint8_t mpu6050AccelConfig = 0x00;       // +/-2 g
 constexpr int16_t mpu6050AccelLsbPerG = 16384;     // +/-2 g scale
 // Keep the degree labels and tangent-squared ratios together: ratios avoid runtime floating-point trigonometry.
@@ -286,10 +316,15 @@ constexpr unsigned long IDLE_SLEEP_HEARTBEAT_ON_MS = 100UL;     // Heartbeat pul
 constexpr unsigned long idleTimeout = 5UL * 60UL * 1000UL;      // Inactivity time before entering idle sleep.
 constexpr unsigned long IDLE_SLEEP_WARNING_LEAD_MS = 15000UL;   // Blink warning this long before idle sleep.
 constexpr unsigned long loadedBatteryReadEveryMs = 250UL;       // Refresh rate for loaded-voltage reads during driving.
-constexpr uint16_t BATTERY_LOW_WARNING_MV = 2;//7250;               // Enter warning mode below this pack voltage.
-constexpr uint16_t BATTERY_LOW_SHUTDOWN_MV = 1;//7150;              // Permanently shut down below this pack voltage.
+constexpr uint16_t BATTERY_LOW_WARNING_MV = 7250;               // Enter warning mode below this pack voltage.
+constexpr uint16_t BATTERY_LOW_SHUTDOWN_MV = 7150;              // Permanently shut down below this pack voltage.
 constexpr uint16_t BATTERY_WARNING_RECOVERY_MV = 7350;          // Exit warning mode once the battery recovers above this.
-constexpr uint16_t BATTERY_MAX_VALID_MV = 15000;                 // Reject obviously invalid 2S battery readings above this.
+// A healthy 2S 18650 pack never exceeds 8.4 V (two cells x 4.2 V full charge). Anything measured
+// above 8.5 V therefore means a genuine overvoltage or a broken/disconnected voltage divider, and
+// the sketch latches a critical-overvoltage fault (see enterCriticalOvervoltage() in
+// 50-power-management.ino). A saturated ADC (raw 1023 = full scale, about 12.2 V with the current
+// divider) cannot be told apart from a broken meter, so the fault log reports both possibilities.
+constexpr uint16_t BATTERY_MAX_VALID_MV = 8500;                 // Above this = overvoltage or broken meter (2S max is 8.4 V).
 constexpr uint16_t BATTERY_MILLIVOLT_SCALE_NUMERATOR = 12221;   // ADC-to-millivolt scale for the current resistor divider.
 constexpr int BATTERY_ADC_MAX = 1023;                           // 10-bit ADC full-scale value on the Nano.
 constexpr uint8_t BATTERY_ADC_SAMPLES = 8;                      // ADC samples averaged per battery measurement.
@@ -319,6 +354,11 @@ constexpr uint16_t buzzerPatternToneHz = 2200;      // Tone used by simple ackno
 // this costs zero flash/RAM and catches a bad configuration (for example, mixed-up threshold
 // constants) before the code is ever uploaded to the Arduino.
 static_assert(BATTERY_LOW_SHUTDOWN_MV < BATTERY_LOW_WARNING_MV, "Shutdown threshold must be below warning threshold.");
+// Guards against debug leftovers: a 2S lithium pack must never be discharged below ~6.0 V, so a
+// warning threshold under 6000 mV can only be an accidental test value (this exact bug shipped
+// once as "BATTERY_LOW_WARNING_MV = 2").
+static_assert(BATTERY_LOW_WARNING_MV >= 6000, "Warning threshold below 6.0 V is unsafe for a 2S pack - debug leftover?");
+static_assert(BATTERY_WARNING_RECOVERY_MV < BATTERY_MAX_VALID_MV, "Recovery threshold must be below the overvoltage limit.");
 static_assert(BATTERY_LOW_WARNING_MV < BATTERY_WARNING_RECOVERY_MV, "Warning recovery must sit above the warning threshold.");
 static_assert(NORMAL_MAX_SPEED_STEP < BOOST_SPEED_STEP, "Boost step must come after the normal top step.");
 static_assert(AUTO_DISTANCE_STOP < AUTO_DISTANCE_RESTART, "AUTO_DISTANCE_STOP must be below AUTO_DISTANCE_RESTART.");
