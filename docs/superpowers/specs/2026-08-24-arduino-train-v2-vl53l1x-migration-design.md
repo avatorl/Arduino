@@ -78,22 +78,39 @@ This constrains the ordering, and the constraint is the single most important co
 this design:
 
 1. Drive XSHUT low, then high, to reset the sensor.
-2. Wait a fixed, conservative boot delay. **Do not read any register while the sensor is still at
-   `0x29`.** Both the VL53L1X and the TCS34725 acknowledge that address and would both drive SDA
-   during a read, so a firmware-status byte read there is not trustworthy and could time out even
-   with healthy hardware.
+2. Wait **10 ms** after releasing XSHUT. The VL53L1X datasheet allows up to roughly 1.2 ms for boot,
+   so 10 ms is a comfortable margin, and it is the delay the sketch already uses at every XSHUT
+   release (`40-sensors.ino:973`, `20-motor.ino:323`, `50-power-management.ino:467` and `:546`).
+   Keep it at 10 ms on all of those paths rather than trimming it.
+
+   **Do not read any register while the sensor is still at `0x29`.** Both the VL53L1X and the
+   TCS34725 acknowledge that address and would both drive SDA during a read, so a firmware-status
+   byte read there is not trustworthy and could time out even with healthy hardware. This delay is
+   therefore the only thing guaranteeing the sensor is awake for the next step.
 3. Write the 7-bit address `0x2A` to `I2C_SLAVE__DEVICE_ADDRESS` (`0x0001`). This is a write-only
-   transaction, which is safe despite the shared address: it is exactly what the current VL53L0X
-   code already does at `40-sensors.ino:986`, and the TCS34725 ignores it because its own register
-   protocol requires the command bit `0x80` to be set on the first byte.
+   transaction and is safe despite the shared address. On the wire it is `[0x00, 0x01, 0x2A]`, and
+   the TCS34725 discards it because its register protocol requires the command bit `0x80` on the
+   first byte (see `TrainColorSensorTCS34725::writeRegister`, `40-sensors.ino:115`), which `0x00`
+   does not have.
+
+   Note this is *safer* than the VL53L0X transaction it replaces, which was `[0x8A, 0x2A]`. That
+   first byte does carry `0x80`, so the TCS34725 would have accepted it as a write to its register
+   `0x0A`. That was harmless only because the train never uses the TCS34725 interrupt thresholds.
 4. Poll `FIRMWARE__SYSTEM_STATUS` (`0x00E5`) at the new address `0x2A` until the low bit reads `1`,
-   subject to `distanceTofTimeoutMs`. Now that the sensor is alone on `0x2A`, this read is reliable.
-   It replaces a fixed delay as the real readiness gate, because the VL53L1X does not behave
-   meaningfully before firmware boot completes.
+   subject to `distanceTofTimeoutMs`. Now that the sensor is alone on `0x2A`, this read is reliable,
+   and it confirms both that boot finished and that the address assignment actually took effect.
 5. Run initialisation at `0x2A`.
+
+If step 3 silently fails, the TCS34725 still acknowledges it, so the write appears to succeed while
+the sensor stays at `0x29`. Step 4 is what catches that, and it is the reason the boot poll must not
+be dropped as redundant.
 
 This same ordering applies on every sleep/wake XSHUT cycle in `50-power-management.ino`, not only at
 cold boot, since XSHUT returns the sensor to `0x29` each time.
+
+The debug-only `logStartupI2cState()` may still probe `0x29`, because a bare address probe is a
+write-only transaction. Its result there is ambiguous by nature, since an ACK could come from either
+chip; the logs should be read with that in mind.
 
 **`init()` must not perform a software reset.** Writing `SOFT_RESET` (`0x0000`), which the Pololu
 library and several other VL53L1X implementations do as their first initialisation step, returns the
@@ -132,9 +149,10 @@ before `startContinuous()`. It writes the packed size to
 `ROI_CONFIG__USER_ROI_REQUESTED_GLOBAL_XY_SIZE` (`0x0080`) as `((height - 1) << 4) | (width - 1)`,
 then the centre to `ROI_CONFIG__USER_ROI_CENTRE_SPAD` (`0x007F`).
 
-ST's ULD `VL53L1X_SetROI()` writes these in the opposite order, centre first. Size-then-centre is
-chosen deliberately so the centre is applied against an already-narrowed window, and either order
-works because neither register takes effect until ranging starts.
+ST's ULD `VL53L1X_SetROI()` writes these in the opposite order, centre first. Both are ordinary
+configuration registers written while ranging is stopped, and no source consulted documents an
+ordering requirement between them, so either order is expected to work. Size-then-centre is simply
+the order chosen here.
 
 Width and height are clamped to the 4..16 range the hardware accepts, so an out-of-range value in
 `config.h` degrades to the nearest legal cone rather than leaving the sensor misconfigured.
