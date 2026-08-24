@@ -78,12 +78,22 @@ This constrains the ordering, and the constraint is the single most important co
 this design:
 
 1. Drive XSHUT low, then high, to reset the sensor.
-2. Poll `FIRMWARE__SYSTEM_STATUS` (`0x00E5`) at `0x29` until the low bit reads `1`, subject to
-   `distanceTofTimeoutMs`. The VL53L1X does not answer meaningfully before firmware boot completes,
-   so a fixed delay is not sufficient.
-3. Write the 7-bit address `0x2A` to `I2C_SLAVE__DEVICE_ADDRESS` (`0x0001`).
-4. Re-confirm `0x00E5` at the new address `0x2A`.
+2. Wait a fixed, conservative boot delay. **Do not read any register while the sensor is still at
+   `0x29`.** Both the VL53L1X and the TCS34725 acknowledge that address and would both drive SDA
+   during a read, so a firmware-status byte read there is not trustworthy and could time out even
+   with healthy hardware.
+3. Write the 7-bit address `0x2A` to `I2C_SLAVE__DEVICE_ADDRESS` (`0x0001`). This is a write-only
+   transaction, which is safe despite the shared address: it is exactly what the current VL53L0X
+   code already does at `40-sensors.ino:986`, and the TCS34725 ignores it because its own register
+   protocol requires the command bit `0x80` to be set on the first byte.
+4. Poll `FIRMWARE__SYSTEM_STATUS` (`0x00E5`) at the new address `0x2A` until the low bit reads `1`,
+   subject to `distanceTofTimeoutMs`. Now that the sensor is alone on `0x2A`, this read is reliable.
+   It replaces a fixed delay as the real readiness gate, because the VL53L1X does not behave
+   meaningfully before firmware boot completes.
 5. Run initialisation at `0x2A`.
+
+This same ordering applies on every sleep/wake XSHUT cycle in `50-power-management.ino`, not only at
+cold boot, since XSHUT returns the sensor to `0x29` each time.
 
 **`init()` must not perform a software reset.** Writing `SOFT_RESET` (`0x0000`), which the Pololu
 library and several other VL53L1X implementations do as their first initialisation step, returns the
@@ -118,9 +128,13 @@ the sensor sits in the locomotive body without physically remounting it. `199` i
 optical centre and is the correct value for a squarely mounted sensor.
 
 The driver applies these through `setRoi(width, height, centerSpad)`, called after `init()` and
-before `startContinuous()`. Following ULD ordering it writes the packed size to
+before `startContinuous()`. It writes the packed size to
 `ROI_CONFIG__USER_ROI_REQUESTED_GLOBAL_XY_SIZE` (`0x0080`) as `((height - 1) << 4) | (width - 1)`,
 then the centre to `ROI_CONFIG__USER_ROI_CENTRE_SPAD` (`0x007F`).
+
+ST's ULD `VL53L1X_SetROI()` writes these in the opposite order, centre first. Size-then-centre is
+chosen deliberately so the centre is applied against an already-narrowed window, and either order
+works because neither register takes effect until ranging starts.
 
 Width and height are clamped to the 4..16 range the hardware accepts, so an out-of-range value in
 `config.h` degrades to the nearest legal cone rather than leaving the sensor misconfigured.
@@ -191,9 +205,14 @@ Executed at `0x2A`, after the boot poll and address assignment described above:
 #### Timing budget and intermeasurement period
 
 The VL53L1X accepts only discrete timing budgets: 15, 20, 33, 50, 100, 200, and 500 ms. The existing
-`distanceTofTimingBudgetUs` of 33000 us is a supported value and is kept. `setMeasurementTimingBudget`
-maps the requested budget onto the nearest supported value and writes the corresponding ULD register
-pair; it does not compute the budget with the VL53L0X's formula.
+`distanceTofTimingBudgetUs` of 33000 us is a supported value and is kept.
+
+`setMeasurementTimingBudget` writes the ULD register pair for the requested budget. Unlike the ULD,
+which rejects unsupported budgets outright, it snaps an unsupported request to the nearest supported
+value and still returns success. This matches how the ROI dimensions degrade gracefully rather than
+failing, and keeps a mistyped `config.h` value from disabling the distance sensor entirely. The
+policy is documented at the setting so the behaviour is not surprising. It does not affect the
+shipped configuration, which is already an exact match.
 
 The intermeasurement period uses the VL53L1X formula, which is also not the VL53L0X one:
 
@@ -201,17 +220,31 @@ The intermeasurement period uses the VL53L1X formula, which is also not the VL53
 value = (readReg16(0x00DE) & 0x03FF) * periodMs * 1.075
 ```
 
-written as a 32-bit value to `SYSTEM__INTERMEASUREMENT_PERIOD` (`0x006C`). The existing
-`distanceTofContinuousPeriodMs` of 50 ms is retained and is valid, since it exceeds the 33 ms budget.
+written as a 32-bit value to `SYSTEM__INTERMEASUREMENT_PERIOD` (`0x006C`).
+
+The `1.075` factor is computed in integer arithmetic as `* 43 / 40` rather than in floating point,
+which would otherwise link AVR floating-point support into flash for a single multiply. Overflow is
+not a concern at the values involved: the oscillator reading is at most 1023 and `periodMs` is 50,
+so the widest intermediate is about 2.2 million and fits comfortably in `uint32_t`.
+
+The existing `distanceTofContinuousPeriodMs` of 50 ms is retained and is valid, since it exceeds the
+33 ms budget.
 
 #### Continuous read path
 
 `readRangeContinuousMillimeters()` mirrors what the current VL53L0X read does at
 `40-sensors.ino:407`, adapted to VL53L1X semantics:
 
-1. Poll data ready via `GPIO__TIO_HV_STATUS` (`0x0031`), comparing against the interrupt polarity
-   derived from `GPIO_HV_MUX__CTRL` (`0x0030`) bit 4. Honour `ioTimeoutMs` and set `didTimeout` on
-   expiry, as today.
+1. Poll data ready via `GPIO__TIO_HV_STATUS` (`0x0031`) against the interrupt polarity derived from
+   `GPIO_HV_MUX__CTRL` (`0x0030`). Note the inversion, which is easy to get backwards and yields the
+   exact opposite result if dropped:
+
+   ```cpp
+   const uint8_t polarity = !((readReg8(0x0030) >> 4) & 0x01);
+   const bool ready = (readReg8(0x0031) & 0x01) == polarity;
+   ```
+
+   Honour `ioTimeoutMs` and set `didTimeout` on expiry, as today.
 2. Read `RESULT__RANGE_STATUS` (`0x0089`).
 3. Read the distance in millimetres as a 16-bit value from
    `RESULT__FINAL_CROSSTALK_CORRECTED_RANGE_MM_SD0` (`0x0096`).
@@ -274,8 +307,9 @@ The renamed pin, address, and log strings ripple through:
 - `40-sensors.ino`: driver struct, `initDistanceSensorHardware()`, and the ranging path.
 - `20-motor.ino` and `30-lights-and-sounds.ino`: XSHUT wake and shutdown writes.
 - `50-power-management.ino`: sleep/wake XSHUT writes and the boot-error report string.
-- `arduino-train-v2.ino`: the error-bit documentation block and the wiring comment at line 367,
-  which still describes XSHUT on D3 and is now doubly stale.
+- `arduino-train-v2.ino`: the error-bit documentation block, the wiring comment at line 367 which
+  still describes XSHUT on D3 and is now doubly stale, and the I2C bus comments at lines 382 and 383
+  which name the VL53L0X as a bus participant.
 - `README.md` lines 41 and 60, which name the VL53L0X in the hardware list and the degraded-mode
   notes.
 
@@ -318,7 +352,9 @@ helpers are retained specifically to diagnose this on hardware.
 
 The address-and-reset interaction is the sharpest failure mode. A stray software reset inside
 `init()` drops the sensor back to `0x29` on top of the TCS34725, which presents as intermittent
-corruption on both devices rather than as a clean distance-sensor fault.
+corruption on both devices rather than as a clean distance-sensor fault. The related trap is reading
+any register while the sensor is still at `0x29`: two devices then drive the bus and the returned
+byte is meaningless, which would show up as a sensor that "fails to boot" despite being healthy.
 
 The 4x4 cone is the third risk. It is deliberately the narrowest the hardware allows, so a sensor
 mounted even slightly off-axis may aim past an obstacle, and an unwise `distanceTofRoiCenterSpad`
