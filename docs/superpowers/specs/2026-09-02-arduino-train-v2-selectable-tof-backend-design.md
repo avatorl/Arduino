@@ -19,27 +19,18 @@ timeout, sample-period, and diagnostic names will replace VL53L1X-specific
 names where they are shared. VL53L1X-only ROI configuration remains compiled
 only with that backend.
 
-The implementation is split into three independent tabs:
+The implementation is split into exactly two independent, self-contained tabs:
 
-- `42-distance-sensor-common.ino` owns filtering, fault handling, and the
-  public distance-sensor lifecycle API.
-- `42-distance-sensor-vl53l0x.ino` contains only the VL53L0X driver and its
-  backend adapter functions, compiled when the default backend is selected.
-- `43-distance-sensor-vl53l1x.ino` contains only the VL53L1X driver and its
-  backend adapter functions, compiled only when the VL53L1X backend is
-  selected.
+- `42-distance-sensor-vl53l0x.ino` contains the entire VL53L0X driver,
+  filtering, fault handling, and public distance-sensor lifecycle API. It is
+  compiled by default.
+- `43-distance-sensor-vl53l1x.ino` contains the equivalent complete VL53L1X
+  implementation. It is compiled only when the VL53L1X backend is selected.
 
-The common tab talks to a small sensor-neutral adapter surface:
-`initializeDistanceSensorBackend()`, `startDistanceSensorBackend()`,
-`stopDistanceSensorBackend()`, `isDistanceSensorSampleReady()`,
-`readDistanceSensorMillimeters()`, and
-`isDistanceSensorReadingValid()`. Initialization returns `false` on any
-address-assignment, boot, or configuration failure. The readiness call must
-not block; read returns a millimeter sample only after readiness is true; the
-validity call reports whether that sample is usable. Consequently, neither
-sensor tab contains the other sensor's driver or branches through its
-chip-specific protocol. Replacing the sensor only requires selecting the
-matching whole-file backend; the inactive tab contributes no program code.
+Each tab is wholly protected by its backend's `#if`, including all runtime
+state and public function definitions. Neither tab references, includes, or
+adapts to the other chip's protocol. Therefore, the inactive source tab can
+be deleted safely; the active tab remains a complete distance-sensor module.
 
 The public API remains `initDistanceSensorHardware()`,
 `startDistanceSensorRanging()`, `setDistanceSensorRangingActive()`, and
