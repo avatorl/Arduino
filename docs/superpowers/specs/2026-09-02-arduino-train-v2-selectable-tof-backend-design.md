@@ -9,11 +9,15 @@ before the TCS34725 color sensor can use the shared default address `0x29`.
 
 ## Approach
 
-`config.h` will expose one mutually exclusive compile-time backend switch. Its
-default selects the VL53L0X; the VL53L1X can be selected explicitly for
-compatible hardware. Sensor-neutral address, XSHUT-pin, timeout, sample-period,
-and diagnostic names will replace VL53L1X-specific names where they are shared.
-VL53L1X-only ROI configuration remains compiled only with that backend.
+`config.h` will expose `USE_VL53L1X_DISTANCE_SENSOR`, a compile-time switch
+whose only valid values are `0` and `1`. It defaults to `0` for VL53L0X; `1`
+selects VL53L1X. Each backend tab owns its outer `#if`:
+`42-distance-sensor-vl53l0x.ino` compiles under `#if
+!USE_VL53L1X_DISTANCE_SENSOR` and `43-distance-sensor-vl53l1x.ino` compiles
+under `#if USE_VL53L1X_DISTANCE_SENSOR`. Sensor-neutral address, XSHUT-pin,
+timeout, sample-period, and diagnostic names will replace VL53L1X-specific
+names where they are shared. VL53L1X-only ROI configuration remains compiled
+only with that backend.
 
 The implementation is split into three independent tabs:
 
@@ -25,8 +29,15 @@ The implementation is split into three independent tabs:
   backend adapter functions, compiled only when the VL53L1X backend is
   selected.
 
-The common tab talks to a small sensor-neutral adapter surface. Consequently,
-neither sensor tab contains the other sensor's driver or branches through its
+The common tab talks to a small sensor-neutral adapter surface:
+`initializeDistanceSensorBackend()`, `startDistanceSensorBackend()`,
+`stopDistanceSensorBackend()`, `isDistanceSensorSampleReady()`,
+`readDistanceSensorMillimeters()`, and
+`isDistanceSensorReadingValid()`. Initialization returns `false` on any
+address-assignment, boot, or configuration failure. The readiness call must
+not block; read returns a millimeter sample only after readiness is true; the
+validity call reports whether that sample is usable. Consequently, neither
+sensor tab contains the other sensor's driver or branches through its
 chip-specific protocol. Replacing the sensor only requires selecting the
 matching whole-file backend; the inactive tab contributes no program code.
 
@@ -37,10 +48,15 @@ continue to use the same non-blocking, median-filtered, fail-safe interface.
 
 ## Failure Handling
 
-Both backends must move off `0x29` before any read that could conflict with the
-TCS34725. Initialization failure, invalid measurements, or stalled ranging
-continues to disable auto-distance mode and stop the motor after the configured
-grace period. Diagnostics identify the compiled sensor backend.
+`initSensorHardware()` must initialize the selected ToF backend before the
+TCS34725. Each backend holds XSHUT low, waits, releases it, waits for boot, and
+write-reassigns the ToF sensor from `0x29` to `0x2A` before its first read or
+configuration transaction. Only then may color-sensor initialization or access
+occur. Sleep/wake calls the same initialization path; failure leaves the sensor
+undetected, keeps ranging inactive, and the existing auto-distance fail-safe
+stops the motor. Invalid measurements or stalled ranging likewise disable
+auto-distance mode and stop the motor after the configured grace period.
+Diagnostics identify the compiled sensor backend.
 
 ## Documentation and Validation
 
