@@ -42,12 +42,21 @@ continue to use the same non-blocking, median-filtered, fail-safe interface.
 `initSensorHardware()` must initialize the selected ToF backend before the
 TCS34725. Each backend holds XSHUT low, waits, releases it, waits for boot, and
 write-reassigns the ToF sensor from `0x29` to `0x2A` before its first read or
-configuration transaction. Only then may color-sensor initialization or access
-occur. Sleep/wake calls the same initialization path; failure leaves the sensor
-undetected, keeps ranging inactive, and the existing auto-distance fail-safe
-stops the motor. Invalid measurements or stalled ranging likewise disable
-auto-distance mode and stop the motor after the configured grace period.
-Diagnostics identify the compiled sensor backend.
+configuration transaction. The VL53L1X reassignment begins with `0x00`, which
+the TCS34725 ignores because its command bit is not set. The VL53L0X
+reassignment begins with `0x8A`, which addresses the TCS34725's unused command
+register `0x0A`; no TCS34725 initialization has yet enabled the device. Each
+backend then confirms its own model ID at `0x2A` before continuing. Only then
+may color-sensor initialization or access occur. Sleep/wake calls the same
+initialization path; failure leaves the sensor undetected, keeps ranging
+inactive, and the existing auto-distance fail-safe stops the motor. Invalid
+measurements or stalled ranging likewise disable auto-distance mode and stop
+the motor after the configured grace period. Diagnostics identify the compiled
+sensor backend.
+
+The migration deletes `42-distance-sensor.ino`,
+`42-distance-sensor-common.ino`, and `90-legacy-vl53l0x.ino`. Only the two
+standalone backend tabs remain.
 
 ## Documentation and Validation
 
