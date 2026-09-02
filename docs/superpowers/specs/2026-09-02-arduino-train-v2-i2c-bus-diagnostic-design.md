@@ -71,6 +71,14 @@ releasing XSHUT and moving VL53L0X to `0x2A`. It ends by holding XSHUT low, so
 the next run begins from the VL53L0X default address and the finished test
 cannot leave a device colliding with TCS34725 at `0x29`.
 
+After releasing XSHUT, the sketch waits 10 ms, then sends exactly one
+write-only address transaction to `0x29`: register pointer `0x8A`, followed by
+the seven-bit address value `0x2A`. `Wire.endTransmission()` must return zero.
+The sketch then makes up to 10 model-ID read attempts at `0x2A`, spaced 2 ms
+apart; the first read of register `0xC0` returning `0xEE` confirms the move.
+Failure of the address write or all 10 confirmation reads marks VL53L0X absent
+for that speed run and skips its 1,000-read stress loop.
+
 `config.h` and `arduino-train-v2.ino` will replace their obsolete MCP23008
 `0x24` wiring/checklist comments with the confirmed `0x20` default address.
 
