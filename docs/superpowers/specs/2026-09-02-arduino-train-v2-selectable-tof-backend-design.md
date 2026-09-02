@@ -15,13 +15,20 @@ compatible hardware. Sensor-neutral address, XSHUT-pin, timeout, sample-period,
 and diagnostic names will replace VL53L1X-specific names where they are shared.
 VL53L1X-only ROI configuration remains compiled only with that backend.
 
-`42-distance-sensor.ino` will contain preprocessor-gated driver implementations:
+The implementation is split into three independent tabs:
 
-- The existing VL53L0X driver from `90-legacy-vl53l0x.ino` becomes the active
-  implementation when the default backend is selected.
-- The existing VL53L1X driver remains available only under the VL53L1X branch.
-- Shared runtime filtering, initialization, continuous-ranging control, and
-  public lifecycle functions stay outside the implementation choice.
+- `42-distance-sensor-common.ino` owns filtering, fault handling, and the
+  public distance-sensor lifecycle API.
+- `42-distance-sensor-vl53l0x.ino` contains only the VL53L0X driver and its
+  backend adapter functions, compiled when the default backend is selected.
+- `43-distance-sensor-vl53l1x.ino` contains only the VL53L1X driver and its
+  backend adapter functions, compiled only when the VL53L1X backend is
+  selected.
+
+The common tab talks to a small sensor-neutral adapter surface. Consequently,
+neither sensor tab contains the other sensor's driver or branches through its
+chip-specific protocol. Replacing the sensor only requires selecting the
+matching whole-file backend; the inactive tab contributes no program code.
 
 The public API remains `initDistanceSensorHardware()`,
 `startDistanceSensorRanging()`, `setDistanceSensorRangingActive()`, and
