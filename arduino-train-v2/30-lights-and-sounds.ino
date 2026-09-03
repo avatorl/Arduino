@@ -347,7 +347,7 @@
     digitalWrite(pinBuzzer, LOW);
     Stop();
     digitalWrite(pinMotorSleep, LOW);
-    digitalWrite(pinVL53L1X_XSHUT, LOW);
+    digitalWrite(pinDistanceSensorXSHUT, LOW);
     distanceTofDetected = false;
     sleepAccelerometer();  // Park the MPU-6050 in its ~5 uA sleep mode; nothing will read it again.
     powerDownColorSensorCore();

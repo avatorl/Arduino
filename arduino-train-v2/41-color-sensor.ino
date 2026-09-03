@@ -2,8 +2,8 @@
   // File description
   // ================================================================================================
   // TCS34725 color-sensor driver, track-marker classification, and color-sensor power control.
-  // Split out of the former 40-sensors.ino; the distance sensor lives in 42-distance-sensor.ino and
-  // the accelerometer in 43-accelerometer.ino.
+  // Split out of the former 40-sensors.ino; the selected distance-sensor backend lives in its
+  // dedicated VL53L0X or VL53L1X tab and the accelerometer in 43-accelerometer.ino.
 
   // TCS34725 color-sensor helper.
   // This struct is a minimal, hand-written driver for the TCS34725 RGB color sensor, talking to it

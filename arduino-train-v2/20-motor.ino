@@ -47,7 +47,7 @@
   }
 
   // Disable auto-distance mode and clear its indicator.
-  // Also stops VL53L1X continuous ranging (the sensor is only needed while auto mode is active,
+  // Also stops distance-sensor continuous ranging (the sensor is only needed while auto mode is active,
   // so this saves power and I2C traffic) and clears the obstacle stop latch so the next auto
   // session starts from a clean state.
   void exitAutoDistanceMode(bool clearIndicator) {
@@ -358,7 +358,7 @@
       return false;
     }
 
-    digitalWrite(pinVL53L1X_XSHUT, HIGH); // Wake up VL53L1X
+    digitalWrite(pinDistanceSensorXSHUT, HIGH); // Wake up distance sensor
     delay(10); // boot time
     startDistanceSensorRanging();
 

@@ -176,7 +176,7 @@
 
   // Append one runtime battery-related event to the EEPROM event ring buffer.
   // This writes into another ring buffer (see the "ring buffer"/wraparound explanation on
-  // pushDistanceSampleAndGetMedian() in 42-distance-sensor.ino for the general idea), except here the wrap
+  // pushDistanceSampleAndGetMedian() in the distance-sensor module for the general idea), except here the wrap
   // is done with the modulo operator "%" directly on the head index instead of an "if" check.
   // EEPROM.update(addr, value) is used instead of EEPROM.write(addr, value) because it first checks
   // whether the byte already holds that value and skips the write if so - EEPROM cells wear out
@@ -242,7 +242,7 @@
     else { DBG_LEDS(battByte / 10); DBG_LEDS(F(".")); DBGLN_LEDS(battByte % 10); }
     if (flags & ERR_LED_EXPANDER) { DBGLN_LEDS(F("  ERR 0x01: MCP23008 LED expander not detected")); }
     if (flags & ERR_COLOR_SENSOR) { DBGLN_LEDS(F("  ERR 0x02: TCS34725 color sensor not detected")); }
-    if (flags & ERR_DISTANCE_TOF) { DBGLN_LEDS(F("  ERR 0x04: VL53L1X distance sensor not detected")); }
+    if (flags & ERR_DISTANCE_TOF) { DBGLN_LEDS(F("  ERR 0x04: distance sensor not detected")); }
     if (flags & ERR_ACCELEROMETER) { DBGLN_LEDS(F("  ERR 0x08: MPU6050 accelerometer not detected")); }
     if (flags == 0) { DBGLN_LEDS(F("  All sensors OK")); }
     #endif
@@ -365,7 +365,7 @@
     idleWakeRequested = false;
     Stop();
     digitalWrite(pinMotorSleep, LOW);
-    digitalWrite(pinVL53L1X_XSHUT, LOW);
+    digitalWrite(pinDistanceSensorXSHUT, LOW);
     distanceTofDetected = false;
     sleepAccelerometer();  // Nothing will read the MPU-6050 again; park it in low-power sleep.
     powerDownColorSensorCore();
@@ -419,7 +419,7 @@
   }
 
   // Enter the shutdown-preparation state before permanent sleep.
-  void enterBatteryShutdown(bool startupLockout) {
+  void enterBatteryShutdown(bool startupLockout, ShutdownCause cause) {
     if (batteryState == BatteryState::Shutdown) {
       if (startupLockout && !shutdownSignalPlayedThisBoot) {
         shutdownSignalPlayedThisBoot = true;
@@ -428,13 +428,18 @@
       return;
     }
 
-    DBGLN_POWER_MANAGEMENT(F("Battery SHUTDOWN level: entering lockout"));
+    shutdownCause = cause;
+    if (cause == ShutdownCause::LowVcc) {
+      DBGLN_POWER_MANAGEMENT(F("VCC SHUTDOWN level: entering lockout"));
+    } else {
+      DBGLN_POWER_MANAGEMENT(F("VIN SHUTDOWN level: entering lockout"));
+    }
     batteryState = BatteryState::Shutdown;
     shutdownSignalPlayedThisBoot = startupLockout;
     applyBatteryRestrictions();
     stopAndResetStepSelection(true);
     digitalWrite(pinMotorSleep, LOW);
-    digitalWrite(pinVL53L1X_XSHUT, LOW);
+    digitalWrite(pinDistanceSensorXSHUT, LOW);
     distanceTofDetected = false;
     distanceTofFaultLatched = true;
     startBatterySignal(BATTERY_SHUTDOWN_SIGNAL_MS, true);
@@ -452,6 +457,77 @@
     analogReference(INTERNAL);
     delay(5);  // Let the internal 1.1V reference settle before discarding the first conversion.
     analogRead(pinBatterySense);
+  }
+
+  // Measure the fixed internal bandgap against AVCC, then restore the 1.1V reference required by
+  // the battery divider. Reading ADCL before ADCH locks the pair until the high byte is read.
+  uint16_t getVccVoltageMv() {
+    ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+    delay(2);
+
+    ADCSRA |= _BV(ADSC);
+    while (ADCSRA & _BV(ADSC)) {}
+    (void)ADCL;
+    (void)ADCH;
+
+    ADCSRA |= _BV(ADSC);
+    while (ADCSRA & _BV(ADSC)) {}
+    uint8_t low = ADCL;
+    uint8_t high = ADCH;
+    uint16_t bandgapReading = ((uint16_t)high << 8) | low;
+
+    initBatteryVoltageMeterHardware();
+    if (bandgapReading == 0) {
+      DBGLN_POWER_MANAGEMENT(F("VCC meter read failed"));
+      return 0;
+    }
+
+    uint32_t scaledMicrovolts = VCC_BANDGAP_CALIBRATION_UV * BATTERY_ADC_MAX;
+    return (uint16_t)((scaledMicrovolts + (bandgapReading / 2U)) / bandgapReading / 1000UL);
+  }
+
+  bool confirmLowVccAtStartup() {
+    consecutiveLowVccSamples = 0;
+    for (uint8_t sampleIndex = 0; sampleIndex < VCC_LOW_CONFIRMATION_COUNT; ++sampleIndex) {
+      vccVoltage = getVccVoltageMv();
+      if (vccVoltage == 0 || vccVoltage >= VCC_LOW_SHUTDOWN_MV) {
+        consecutiveLowVccSamples = 0;
+        return false;
+      }
+      ++consecutiveLowVccSamples;
+      if (sampleIndex + 1U < VCC_LOW_CONFIRMATION_COUNT) delay(VCC_CHECK_INTERVAL_MS);
+    }
+    return true;
+  }
+
+  void updateVccGuard() {
+    if (batteryState == BatteryState::Shutdown) return;
+
+    unsigned long now = millis();
+    if (now - lastVccCheckMs < VCC_CHECK_INTERVAL_MS) return;
+    lastVccCheckMs = now;
+
+    vccVoltage = getVccVoltageMv();
+    if (vccVoltage == 0) {
+      consecutiveLowVccSamples = 0;
+      return;
+    }
+
+    if (vccVoltage < VCC_LOW_SHUTDOWN_MV) {
+      if (consecutiveLowVccSamples < VCC_LOW_CONFIRMATION_COUNT) ++consecutiveLowVccSamples;
+      DBG_POWER_MANAGEMENT(F("VCC low: "));
+      DBG_POWER_MANAGEMENT(vccVoltage);
+      DBG_POWER_MANAGEMENT(F(" mV (sample "));
+      DBG_POWER_MANAGEMENT(consecutiveLowVccSamples);
+      DBG_POWER_MANAGEMENT(F("/"));
+      DBG_POWER_MANAGEMENT(VCC_LOW_CONFIRMATION_COUNT);
+      DBGLN_POWER_MANAGEMENT(F(")"));
+      if (consecutiveLowVccSamples >= VCC_LOW_CONFIRMATION_COUNT) {
+        enterBatteryShutdown(false, ShutdownCause::LowVcc);
+      }
+    } else {
+      consecutiveLowVccSamples = 0;
+    }
   }
 
   // Read one battery-percent lookup-table entry from PROGMEM.
@@ -485,7 +561,7 @@
     DBGLN_IR_REMOTE(F("Entering sleep mode..."));
     for (;;) {
       digitalWrite(pinMotorSleep, LOW);  // Disable the DRV8833 while the Arduino sleeps.
-      digitalWrite(pinVL53L1X_XSHUT, LOW); // Turn off VL53L1X for sleep
+      digitalWrite(pinDistanceSensorXSHUT, LOW); // Turn off distance sensor for sleep
       idleWakeRequested = false;
       // attachInterrupt(pin, function, mode) tells the chip to run "function" automatically the
       // instant the given pin changes state matching "mode" (CHANGE = either LOW->HIGH or
@@ -521,7 +597,7 @@
       }
       detachInterrupt(digitalPinToInterrupt(pinIRReceiver));
 
-      digitalWrite(pinVL53L1X_XSHUT, HIGH); // Wake up VL53L1X
+      digitalWrite(pinDistanceSensorXSHUT, HIGH); // Wake up distance sensor
       delay(10); // boot time
       startDistanceSensorRanging();
 
@@ -750,9 +826,3 @@
   int safePWMFromVoltage(uint16_t desiredMotorMv, uint16_t supplyVoltageMv) {
     return safePwmFromMilliVolts(desiredMotorMv, supplyVoltageMv, MAX_SAFE_MOTOR_MV);
   }
-
-  // ================================================================================================
-  // Manual speed (steps)
-  // ================================================================================================
-  // Precompute discrete manual speed steps so the remote can step through predictable speeds.
-  // Build manual speed steps from live battery voltage.

@@ -19,18 +19,28 @@ main sketch must be corrected to `0x20`.
 
 ## Test Flow
 
-The test starts serial output, performs a standard nine-clock I2C bus recovery
-if SDA is low, then verifies SDA and SCL idle high. For each test speed (100
-kHz and 400 kHz), it:
+The test waits for the user to choose a short (1,000 reads per device) or long
+(10,000 reads per device) run over serial, performs a standard nine-clock I2C
+bus recovery if SDA is low, then verifies SDA and SCL idle high. For each test
+speed (100 kHz and 400 kHz), it:
 
-1. Holds VL53L0X XSHUT low and repeatedly reads MCP23008 and TCS34725
+1. Measures SDA/SCL idle voltages with the ADC (fail below 3.0 V, warn below
+   4.0 V) and scans the full 7-bit address range `0x08`–`0x77`, labeling every
+   responding address.
+2. Holds VL53L0X XSHUT low and repeatedly reads MCP23008 and TCS34725
    registers at their normal addresses.
-2. Releases XSHUT, waits for boot, write-reassigns VL53L0X from `0x29` to
+3. Releases XSHUT, waits for boot, write-reassigns VL53L0X from `0x29` to
    `0x2A`, and verifies its model ID there.
-3. Repeats non-destructive register reads for each device 1,000 times,
-   recording transaction failures, short reads, and Wire timeout flags.
-4. Verifies bus idle levels after each run and prints per-device and aggregate
-   pass/fail results.
+4. Runs a write/read-back pattern test (`0x00`, `0xFF`, `0x55`, `0xAA`) on the
+   MCP23008 DEFVAL scratch register, restoring the original value afterward.
+5. Repeats non-destructive register reads for each device the selected number
+   of times, with every 10th read replaced by a multi-byte burst read,
+   recording transaction failures, short reads, timing statistics
+   (min/avg/max microseconds), and Wire timeout flags.
+6. Runs an interleaved round-robin stress phase alternating rapidly between
+   all devices that passed setup.
+7. Verifies bus idle levels after each run and prints per-device and aggregate
+   pass/fail results including timing statistics.
 
 The sketch does not write MCP23008 output registers and does not evaluate
 distance, color, or accelerometer data.
@@ -45,7 +55,7 @@ before every transaction.
   chip ID, so the first successful value is retained and every later value
   must match it.
 - TCS34725: read ID using command byte `0x92` (`0x80 | 0x12`) at `0x29`; the
-  value must be `0x44`.
+  value must be the module's expected ID `0x4D`.
 - VL53L0X: after readdressing, read one byte from model-ID register `0xC0` at
   `0x2A`; the value must be `0xEE`.
 
@@ -53,7 +63,7 @@ Every register read uses write-register-pointer, repeated start, and exact
 one-byte receive. The test records total attempts, successful reads, I2C
 transmission failures, short reads, mismatched values, and Wire timeouts for
 each device and speed. A run passes only when every expected device is
-identified, all 1,000 reads for every device succeed with no mismatches or
+identified, all selected reads for every device succeed with no mismatches or
 timeouts, and both lines are idle high after the run. The final summary passes
 only when both speed runs pass.
 

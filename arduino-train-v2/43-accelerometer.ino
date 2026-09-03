@@ -3,7 +3,7 @@
   // ================================================================================================
   // MPU-6050 accelerometer driver and the tilt/crash safety checks built on top of it.
   // Split out of the former 40-sensors.ino; the color sensor lives in 41-color-sensor.ino and the
-  // distance sensor in 42-distance-sensor.ino. The mechanical tilt switch is handled by
+  // selected distance-sensor backend in its dedicated VL53L0X or VL53L1X tab. The mechanical tilt switch is handled by
   // updateTiltSensor() in arduino-train-v2.ino.
 
   // MPU-6050 accelerometer helper.

@@ -10,6 +10,15 @@
 // Group settings by module so a train developer can tune wiring, thresholds, timings, calibration,
 // and remote mappings here without hunting through multiple .ino files.
 
+
+// Needs physical hardware verification:
+// 1. I2C devices respond at 0x20 / 0x29 / 0x2A / 0x68 after the new 400 kHz bus init
+// 2. Tilt-switch polarity (LOW = upright) on the real switch
+// 3. Distance behavior: stop <8 cm, restart >11 cm, crawl in the 8–11 band; new 8×4 ROI cone coverage vs. floor rejection
+// 4. Auto-mode enable: brief red "waiting for reading" then drive (~100–150 ms)
+// 5. Idle sleep/wake with MPU6050 sleep cycling; heartbeat blink
+// 6. Battery thresholds against a real 2S pack; ADC-saturation log message
+
 // ############################################################################
 // # USER SETTINGS SHARED BY MULTIPLE MODULES - SAFE TO CHANGE BEFORE BUILD   #
 // ############################################################################
@@ -51,16 +60,16 @@
 // ENABLE_EEPROM_LOGGING: it only takes the default value shown here if nothing else already
 // defined it first.
 #ifndef DEBUG_IR_REMOTE
-#define DEBUG_IR_REMOTE 0
+#define DEBUG_IR_REMOTE 1
 #endif
 #ifndef DEBUG_MOTOR
 #define DEBUG_MOTOR 0
 #endif
 #ifndef DEBUG_COLOR_SENSOR
-#define DEBUG_COLOR_SENSOR 0
+#define DEBUG_COLOR_SENSOR 1
 #endif
 #ifndef DEBUG_DISTANCE_SENSOR
-#define DEBUG_DISTANCE_SENSOR 0
+#define DEBUG_DISTANCE_SENSOR 1
 #endif
 #ifndef DEBUG_TILT_SENSOR
 #define DEBUG_TILT_SENSOR 0
@@ -68,12 +77,14 @@
 #ifndef DEBUG_ACCELEROMETER
 #define DEBUG_ACCELEROMETER 0
 #endif
-// Keep the retired VL53L0X driver (90-legacy-vl53l0x.ino) out of the build.
-// Unit: compile-time feature switch.
-// Wrong value effect: at 1 the old driver compiles again and wastes flash; it is reference code
-// only and is not wired to anything.
-#ifndef ENABLE_VL53L0X_LEGACY_DRIVER
-#define ENABLE_VL53L0X_LEGACY_DRIVER 0
+// Select the installed time-of-flight distance-sensor backend at compile time.
+// 0 = VL53L0X (default); 1 = VL53L1X. Only one driver is compiled.
+// Override this definition from the build system for compatible VL53L1X hardware.
+#ifndef USE_VL53L1X_DISTANCE_SENSOR
+#define USE_VL53L1X_DISTANCE_SENSOR 0
+#endif
+#if USE_VL53L1X_DISTANCE_SENSOR != 0 && USE_VL53L1X_DISTANCE_SENSOR != 1
+#error "USE_VL53L1X_DISTANCE_SENSOR must be 0 (VL53L0X) or 1 (VL53L1X)"
 #endif
 #ifndef DEBUG_POWER_MANAGEMENT
 #define DEBUG_POWER_MANAGEMENT 0
@@ -107,9 +118,9 @@
 
 // --- I2C Addresses ---
 // The I2C bus is shared by multiple devices. Each device has a unique 7-bit address.
-constexpr uint8_t mcp23008Address = 0x24; // MCP23008 LED expander = 0x24 (A0 LOW, A1 LOW, A2 HIGH)
+constexpr uint8_t mcp23008Address = 0x20; // (A0, A1, A2 pulled LOW by default)
 constexpr uint8_t tcs34725Address = 0x29; // TCS34725 RGB color sensor = 0x29 (default)
-constexpr uint8_t vl53l1xAddress = 0x2A; // VL53L1X distance sensor = 0x2A (changed from default 0x29 using XSHUT pin)
+constexpr uint8_t distanceSensorAddress = 0x2A; // Distance sensor = 0x2A (changed from default 0x29 using XSHUT pin)
 constexpr uint8_t mpu6050Address = 0x68; // MPU6050 accelerometer = 0x68 (default, AD0 pin LOW)
 
 // --- Pins a builder may want to rewire ---
@@ -122,7 +133,7 @@ constexpr uint8_t mpu6050Address = 0x68; // MPU6050 accelerometer = 0x68 (defaul
 constexpr int pinBatterySense = A0;
 // A1 - unused
 constexpr int pinColorSensorLED = A2;
-constexpr int pinVL53L1X_XSHUT = A3;
+constexpr int pinDistanceSensorXSHUT = A3;
 // A4 - SDA (I2C data) shared by all I2C devices
 // A5 - SCL (I2C clock) shared by all I2C devices
 // A6 - unused
@@ -136,20 +147,24 @@ constexpr int pinMotor_IN1 = 5; // with PWM
 constexpr int pinMotor_IN2 = 6; // with PWM
 constexpr int pinMotorSleep = 7;
 constexpr int pinMotorFault = 8;
-constexpr int pinTiltSensor = 9;
-// D10 - unused
+constexpr int pinBuzzer = 9;
+constexpr int pinTiltSensor = 10;
 // D11 - unused
-constexpr int pinBuzzer = 12;
+// D12 - unused
 // D13 - unused (built-in LED)
 
 // --- MCP23008 expander pin mapping ---
-constexpr uint8_t led1RedExpanderPin = 0;
-constexpr uint8_t led1GreenExpanderPin = 1;
-constexpr uint8_t led1BlueExpanderPin = 2;
-constexpr uint8_t led2RedExpanderPin = 3;
-constexpr uint8_t led2GreenExpanderPin = 4;
-constexpr uint8_t led2BlueExpanderPin = 5;
+// Green LED
 constexpr uint8_t ledGreenExpanderPin = 6;
+// RGB LED 1
+constexpr uint8_t led1RedExpanderPin = 1;
+constexpr uint8_t led1GreenExpanderPin = 2;
+constexpr uint8_t led1BlueExpanderPin = 3;
+// RGB LED 2
+constexpr uint8_t led2RedExpanderPin = 4;
+constexpr uint8_t led2GreenExpanderPin = 5;
+constexpr uint8_t led2BlueExpanderPin = 6;
+// 2 x Red LEDs (on the same pin)
 constexpr uint8_t ledRearRedExpanderPin = 7;
 
 // --- IR remote mapping ---
@@ -261,9 +276,9 @@ const MarkerClusterDefinition markerClusters[] PROGMEM = {
 constexpr uint8_t markerClusterCount = sizeof(markerClusters) / sizeof(markerClusters[0]);
 
 // Distance-sensor timing and fault handling.
-constexpr uint16_t distanceTofTimeoutMs = 50;          // VL53L1X timeout for one measurement attempt.
-constexpr uint32_t distanceTofTimingBudgetUs = 33000UL; // VL53L1X measurement timing budget.
-constexpr uint32_t distanceTofContinuousPeriodMs = 50UL; // VL53L1X continuous-mode period.
+constexpr uint16_t distanceTofTimeoutMs = 50;           // Timeout for one measurement attempt.
+constexpr uint32_t distanceTofTimingBudgetUs = 33000UL; // Measurement timing budget.
+constexpr uint32_t distanceTofContinuousPeriodMs = 50UL; // Continuous-mode period.
 
 // Distance-sensor detection cone (VL53L1X region of interest).
 // Smaller ROI = narrower cone = better floor and side-wall rejection, but shorter range.
@@ -274,9 +289,11 @@ constexpr uint32_t distanceTofContinuousPeriodMs = 50UL; // VL53L1X continuous-m
 // sensor does not stare at the floor in front of the train or at the ceiling).
 // Wrong value effect: a centre far from 199 combined with a small ROI can push the window off the
 // SPAD array, which yields range status 13 and no usable readings at all.
+#if USE_VL53L1X_DISTANCE_SENSOR
 constexpr uint8_t distanceTofRoiWidth = 8;             // Horizontal SPADs: wide to cover curves.
 constexpr uint8_t distanceTofRoiHeight = 4;            // Vertical SPADs: short to reject the floor.
 constexpr uint8_t distanceTofRoiCenterSpad = 199;      // 199 is the array's optical centre.
+#endif
 constexpr unsigned long tofReadEveryMs = 50UL;         // How often the sketch consumes a ToF reading.
 constexpr unsigned long tofFailureGraceMs = 250UL;     // Keep using the last good reading for this long before declaring a fault.
 // If the sensor never delivers a single valid reading within this time after ranging starts,
@@ -311,20 +328,28 @@ constexpr unsigned long BATTERY_CHECK_INTERVAL_MS = 5000UL;     // Time between 
 constexpr unsigned long BATTERY_WARNING_SIGNAL_MS = 3000UL;     // Length of the warning sound/light signal.
 constexpr unsigned long BATTERY_WARNING_REPEAT_MS = 60000UL;    // How often warning mode reminds the user.
 constexpr unsigned long BATTERY_SHUTDOWN_SIGNAL_MS = 10000UL;   // Length of the final shutdown signal.
+constexpr unsigned long VCC_CHECK_INTERVAL_MS = 100UL;          // Check the Nano 5V rail this often during normal operation.
 constexpr unsigned long IDLE_SLEEP_HEARTBEAT_MS = 32000UL;      // Sleep heartbeat cycle while idling.
 constexpr unsigned long IDLE_SLEEP_HEARTBEAT_ON_MS = 100UL;     // Heartbeat pulse ON time.
 constexpr unsigned long idleTimeout = 5UL * 60UL * 1000UL;      // Inactivity time before entering idle sleep.
 constexpr unsigned long IDLE_SLEEP_WARNING_LEAD_MS = 15000UL;   // Blink warning this long before idle sleep.
 constexpr unsigned long loadedBatteryReadEveryMs = 250UL;       // Refresh rate for loaded-voltage reads during driving.
 constexpr uint16_t BATTERY_LOW_WARNING_MV = 7250;               // Enter warning mode below this pack voltage.
-constexpr uint16_t BATTERY_LOW_SHUTDOWN_MV = 7150;              // Permanently shut down below this pack voltage.
+constexpr uint16_t BATTERY_LOW_SHUTDOWN_MV = 6000;              // Emergency pack protection: permanently shut down below this voltage.
 constexpr uint16_t BATTERY_WARNING_RECOVERY_MV = 7350;          // Exit warning mode once the battery recovers above this.
+constexpr uint16_t VCC_LOW_SHUTDOWN_MV = 4850;                  // Protect the 16MHz Nano and 5V peripherals before VCC reaches 4.5V.
+constexpr uint8_t VCC_LOW_CONFIRMATION_COUNT = 3;               // Consecutive low VCC samples required before shutdown.
+// Calibrate this to the actual ATmega328P bandgap voltage in microvolts if a multimeter comparison
+// shows a material error. VCC mV = VCC_BANDGAP_CALIBRATION_UV * 1023 / ADC_bandgap_reading / 1000.
+constexpr uint32_t VCC_BANDGAP_CALIBRATION_UV = 1100000UL;
 // A healthy 2S 18650 pack never exceeds 8.4 V (two cells x 4.2 V full charge). Anything measured
 // above 8.5 V therefore means a genuine overvoltage or a broken/disconnected voltage divider, and
 // the sketch latches a critical-overvoltage fault (see enterCriticalOvervoltage() in
 // 50-power-management.ino). A saturated ADC (raw 1023 = full scale, about 12.2 V with the current
 // divider) cannot be told apart from a broken meter, so the fault log reports both possibilities.
 constexpr uint16_t BATTERY_MAX_VALID_MV = 8500;                 // Above this = overvoltage or broken meter (2S max is 8.4 V).
+// 100K and 10K resistor divider for battery voltage measurement (99K and 9.9k actual values), scale factor = (100K + 10K) / 10K = 11.
+// 11 * 1.1V max reference voltage * 1.01 calibration factor = 12.221
 constexpr uint16_t BATTERY_MILLIVOLT_SCALE_NUMERATOR = 12221;   // ADC-to-millivolt scale for the current resistor divider.
 constexpr int BATTERY_ADC_MAX = 1023;                           // 10-bit ADC full-scale value on the Nano.
 constexpr uint8_t BATTERY_ADC_SAMPLES = 8;                      // ADC samples averaged per battery measurement.
@@ -360,6 +385,9 @@ static_assert(BATTERY_LOW_SHUTDOWN_MV < BATTERY_LOW_WARNING_MV, "Shutdown thresh
 static_assert(BATTERY_LOW_WARNING_MV >= 6000, "Warning threshold below 6.0 V is unsafe for a 2S pack - debug leftover?");
 static_assert(BATTERY_WARNING_RECOVERY_MV < BATTERY_MAX_VALID_MV, "Recovery threshold must be below the overvoltage limit.");
 static_assert(BATTERY_LOW_WARNING_MV < BATTERY_WARNING_RECOVERY_MV, "Warning recovery must sit above the warning threshold.");
+static_assert(VCC_CHECK_INTERVAL_MS > 0, "VCC check interval must be nonzero.");
+static_assert(VCC_LOW_CONFIRMATION_COUNT > 0, "VCC low confirmation count must be nonzero.");
+static_assert(VCC_LOW_SHUTDOWN_MV > 4500, "VCC shutdown threshold must stay above the 16MHz ATmega328P minimum.");
 static_assert(NORMAL_MAX_SPEED_STEP < BOOST_SPEED_STEP, "Boost step must come after the normal top step.");
 static_assert(AUTO_DISTANCE_STOP < AUTO_DISTANCE_RESTART, "AUTO_DISTANCE_STOP must be below AUTO_DISTANCE_RESTART.");
 static_assert(AUTO_DISTANCE_RESTART < AUTO_DISTANCE_MAX_SPEED, "AUTO_DISTANCE_RESTART must be below AUTO_DISTANCE_MAX_SPEED.");

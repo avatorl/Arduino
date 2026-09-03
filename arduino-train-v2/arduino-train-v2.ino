@@ -26,10 +26,10 @@
   //   - 20-motor.ino
   //   - 30-lights-and-sounds.ino
   //   - 41-color-sensor.ino
-  //   - 42-distance-sensor.ino
+  //   - 42-distance-sensor-vl53l0x.ino
+  //   - 43-distance-sensor-vl53l1x.ino
   //   - 43-accelerometer.ino
   //   - 50-power-management.ino
-  //   - 90-legacy-vl53l0x.ino (retired VL53L0X driver, excluded from the build by default)
 
   // ===============================================================================================
   // Sketch Contents / Structure Guide
@@ -74,7 +74,7 @@
   // Error flag bit map:
   //   Bit 0  0x01  MCP23008 LED expander not detected
   //   Bit 1  0x02  TCS34725 color sensor not detected
-  //   Bit 2  0x04  VL53L1X distance sensor not detected
+  //   Bit 2  0x04  Distance sensor not detected
   //   Bit 3  0x08  MPU6050 accelerometer not detected
   const uint16_t EEPROM_ADDR_BOOT_COUNT = 0x00;
   const uint8_t  EEPROM_ADDR_LOG_HEAD   = 0x02;
@@ -241,6 +241,12 @@
     Shutdown
   };
 
+  enum class ShutdownCause : uint8_t {
+    None = 0,
+    LowVin,
+    LowVcc
+  };
+
   // Visible/audible state reference:
   //   Normal stopped/forward/reverse: motor stopped/forward/reverse; front red/white/blue; no fault sound; command changes state.
   //   Normal auto: motor follows distance; green on and normal drive color; no fault sound; command disables auto.
@@ -296,6 +302,9 @@
   void initSensorHardware();
   void initColorSensorHardware();
   void initBatteryVoltageMeterHardware();
+  uint16_t getVccVoltageMv();
+  bool confirmLowVccAtStartup();
+  void updateVccGuard();
   void powerDownColorSensorCore();
   void setColorSensorEnabled(bool enabled);
   void updateColorSensor();
@@ -316,7 +325,7 @@
   void sleepAccelerometer();
   void wakeAccelerometer();
   bool startDistanceSensorRanging();
-  // Starts or stops VL53L1X continuous ranging without a full re-init. Ranging is only needed while
+  // Starts or stops distance-sensor continuous ranging without a full re-init. Ranging is only needed while
   // auto-distance mode is active, so stopping it saves power and I2C traffic the rest of the time.
   void setDistanceSensorRangingActive(bool active);
   int getDistanceReading();
@@ -336,7 +345,7 @@
   void SetRearRedLight(bool enabled);
   void enterBatteryWarning();
   void exitBatteryWarning();
-  void enterBatteryShutdown(bool startupLockout = false);
+  void enterBatteryShutdown(bool startupLockout = false, ShutdownCause cause = ShutdownCause::LowVin);
   void updateBatterySignal();
   void clearBuzzerPattern();
   bool isBuzzerPatternPlaying();
@@ -358,7 +367,7 @@
   const __FlashStringHelper* trackMarkerLabel(uint8_t markerClass);
   #endif
 
-  // Sensor-owned shared state is defined in 41-color-sensor.ino / 42-distance-sensor.ino and
+  // Sensor-owned shared state is defined in 41-color-sensor.ino and the selected distance-sensor backend and
   // declared here so other modules can use it.
   extern bool colorSensorDetected;
   extern uint8_t Distance;
@@ -398,9 +407,9 @@
   //   A0  -> Battery voltage sense analog input.
   //   A1  -> Free analog-input-only pin.
   //   A2  -> TCS34725 breakout LED control output (digital-capable analog pin).
-  //   A3  -> VL53L1X XSHUT output for sensor reset / I2C address setup.
-  //   A4  -> I2C SDA shared by the MCP23008, TCS34725, VL53L1X, and MPU6050.
-  //   A5  -> I2C SCL shared by the MCP23008, TCS34725, VL53L1X, and MPU6050.
+  //   A3  -> Distance-sensor XSHUT output for sensor reset / I2C address setup.
+  //   A4  -> I2C SDA shared by the MCP23008, TCS34725, distance sensor, and MPU6050.
+  //   A5  -> I2C SCL shared by the MCP23008, TCS34725, distance sensor, and MPU6050.
   //   A6  -> Free analog-input-only pin.
   //   A7  -> Free analog-input-only pin.
   // SPI note: SPI is not used in this sketch, but an SPI peripheral would conflict with the buzzer
@@ -507,7 +516,7 @@
   //   Nano A5/SCL -> MCP23008 SCL and TCS34725 SCL
   //   Nano 5V     -> MCP23008 VCC and TCS34725 VIN/VCC
   //   Nano GND    -> MCP23008 GND and TCS34725 GND
-  //   MCP23008 address pins A0/A1 -> GND and A2 -> 5V, giving I2C address 0x24 (0x20 + A2 bit)
+  //   MCP23008 address pins A0/A1/A2 -> GND, giving I2C address 0x20
   //   MCP23008 RESET -> pull HIGH (10 kOhm to 5V preferred; direct tie to 5V also works)
   //   MCP23008 VDD/GND -> place a 100 nF ceramic decoupling capacitor close to the chip
   //   SDA/SCL     -> need one effective I2C pull-up pair on the whole bus (typically 4.7 kOhm to 5V)
@@ -565,6 +574,7 @@
   bool AutoDistanceOnOff = false;
   bool ColorSensorOnOff = false;
   BatteryState batteryState = BatteryState::Normal;
+  ShutdownCause shutdownCause = ShutdownCause::None;
   bool criticalOvervoltageLatched = false;
   uint8_t MotorDirection = 1;   // always has a direction
   uint8_t Speed = 0;            // stopped at start
@@ -594,6 +604,7 @@
   unsigned long lastActive = 0;
   unsigned long lastBatteryDebugPrintMs = 0;
   unsigned long lastBatteryCheckMs = 0;
+  unsigned long lastVccCheckMs = 0;
   unsigned long lastBatteryWarningSignalMs = 0;
   unsigned long batterySignalEndsAt = 0;
   bool batterySignalActive = false;
@@ -628,6 +639,8 @@
   uint8_t pwmSteps[5];  // 0..255
   uint16_t batteryVoltage = 0;
   uint16_t loadedBatteryVoltage = 0;
+  uint16_t vccVoltage = 0;
+  uint8_t consecutiveLowVccSamples = 0;
   unsigned long lastLoadedBatteryReadMs = 0;
   // Buzzer
   #define BUZZER_PATTERN_MAX 20
@@ -676,7 +689,7 @@
   // ================================================================================================
   // Shared I2C bus initialization
   // ================================================================================================
-  // Called exactly once from setup(), BEFORE any I2C device driver (MCP23008, TCS34725, VL53L1X,
+  // Called exactly once from setup(), BEFORE any I2C device driver (MCP23008, TCS34725, distance sensor,
   // MPU6050) touches the bus. Doing this in one place (instead of inside every driver's begin())
   // guarantees every device sees the same bus speed and timeout settings.
   void initI2cBus() {
@@ -763,6 +776,12 @@
       // The latch was already set inside getBatteryVoltageDirect() - stop setup here.
       return;
     }
+    #if !DISABLE_VOLTAGE_METERING
+    if (confirmLowVccAtStartup()) {
+      enterBatteryShutdown(true, ShutdownCause::LowVcc);
+      return;
+    }
+    #endif
     // F("...") wraps a text string so it stays stored in flash memory (PROGMEM) instead of being
     // copied into precious SRAM at startup. Debug/status text is a great candidate for F() because
     // it's read-only and only needed occasionally, freeing up SRAM for actual program data. This
@@ -834,6 +853,10 @@
       }
       return;
     }
+
+    #if !DISABLE_VOLTAGE_METERING
+    updateVccGuard();
+    #endif
 
     // === 1. DRV8833 fault watchdog ===
     // Reads the motor-driver fault pin and latches a safe stop if the driver reports an error such
@@ -926,9 +949,9 @@
   // ================================================================================================
   // Sensor-wide hardware setup groups tilt pin setup, accelerometer probing, distance-sensor reset,
   // and color-sensor startup. The individual sensor drivers live in 41-color-sensor.ino,
-  // 42-distance-sensor.ino, and 43-accelerometer.ino.
+  // the selected distance-sensor backend, and 43-accelerometer.ino.
   void initSensorHardware() {
-    pinMode(pinTiltSensor, INPUT_PULLUP);
+    pinMode(pinTiltSensor, INPUT); // external pull resistor expected
     initAccelerometerHardware();
     initDistanceSensorHardware();
     initColorSensorHardware();
