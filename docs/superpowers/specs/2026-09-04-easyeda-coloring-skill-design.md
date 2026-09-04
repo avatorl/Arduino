@@ -33,8 +33,10 @@ The skill will require this workflow:
    affected.
 
 The skill will prohibit global color replacement and palette-wide edits as a
-shortcut. It will not alter Arduino firmware, vendored libraries, schematic
-content, or the canonical schema itself.
+shortcut. Installing this skill will not alter Arduino firmware, vendored
+libraries, existing schematic content, or the canonical schema itself.
+When subsequently invoked for a schematic task, the skill is specifically
+intended to guide the requested schematic JSON changes.
 
 ## Documentation and Compatibility
 
@@ -42,6 +44,10 @@ content, or the canonical schema itself.
 existing repository instruction continues to work. The skill references this
 single source of truth instead of duplicating its palette, preventing future
 rule drift.
+
+`SKILL.md` will contain YAML front matter with `name` set to
+`easyeda-coloring` and a concise `description` that states when to invoke the
+skill. Its Markdown body will provide the workflow and safety constraints.
 
 ## Validation
 
