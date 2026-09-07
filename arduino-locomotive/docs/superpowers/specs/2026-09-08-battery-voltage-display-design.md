@@ -8,7 +8,9 @@ shown as `8.06 V`, rather than the ambiguous and incorrect-looking `8.6 V`.
 ## Scope
 
 Add one shared debug-output helper that accepts a `uint16_t` millivolt value
-and emits whole volts plus a zero-padded two-digit fractional component.
+and writes only the numeric whole-volts and zero-padded two-digit fractional
+component through the existing debug-print macros. Callers retain ownership of
+their surrounding labels and any unit suffix.
 Replace the duplicated voltage formatting in:
 
 - the battery ADC diagnostic trace;
@@ -25,8 +27,10 @@ The helper preserves the existing measurement value and prints:
 8000 mV -> 8.00
 ```
 
-It does not round, recalibrate, sample the ADC, alter battery thresholds, or
-change PWM and motor-control behavior.
+The battery ADC trace and boot-time battery message append ` V`; the manual
+battery-status message keeps its existing label and receives the same numeric
+format. The helper does not round, recalibrate, sample the ADC, alter battery
+thresholds, or change PWM and motor-control behavior.
 
 ## Validation
 
