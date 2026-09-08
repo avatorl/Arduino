@@ -21,7 +21,9 @@ stops.
 Recover the sensor exactly as at initial startup:
 
 1. After releasing XSHUT during idle wake, reset the driver's target address
-   to the sensor's physical default `0x29`.
+   to the sensor's physical default `0x29` by assigning a newly constructed
+   `VL53L0X` instance to `distanceTof`. This updates only the in-memory
+   library state; it does not attempt I2C communication at the stale `0x2A`.
 2. Reuse the established ranging initializer to move the device to
    `distanceSensorAddress` (`0x2A`), apply its configured operating profile,
    reset its filter, and start continuous ranging when AUTO remains enabled.
@@ -35,8 +37,10 @@ fresh valid measurement and will keep the motor stopped when recovery fails.
 
 Add a narrow recovery helper in `42-distance-sensor-vl53l0x.ino`. It is called
 only after XSHUT has been held low and then released. The helper updates the
-driver object's address back to `0x29` before calling the existing
-`startDistanceSensorRanging()` path.
+driver object's address back to `0x29` with
+`distanceTof = VL53L0X();` before calling the existing
+`startDistanceSensorRanging()` path. It must not call `setAddress(0x29)`,
+because that method sends an I2C write to the object's stale `0x2A` address.
 
 The existing initializer continues to own all profile configuration,
 filter-state clearing, and continuous-ranging activation. No duplicate sensor
@@ -62,8 +66,9 @@ restoration, and captured-IR-command flow unchanged.
 
 Extend the native source-contract tests to verify:
 
-1. A dedicated post-XSHUT recovery helper sets the driver address to `0x29`
-   before calling `startDistanceSensorRanging()`.
+1. A dedicated post-XSHUT recovery helper recreates the driver object at
+   `0x29` before calling `startDistanceSensorRanging()` and does not use
+   `setAddress(0x29)`.
 2. `goToIdle()` invokes that helper after it raises
    `pinDistanceSensorXSHUT`.
 3. The normal AUTO handoff contract remains intact.
