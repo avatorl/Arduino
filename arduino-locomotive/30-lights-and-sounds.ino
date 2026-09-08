@@ -124,8 +124,8 @@
 
   // ------------------------------------------------------------------------------------------------
   // Initiate battery percentage sound pattern. Then updateBuzzer plays the pattern.
-  //    - 10%..100% -> 1..10 short beeps
-  //    - 0% -> one extra-short beep
+  //    - 10%..100% -> 1..10 long beeps with clearly separated intervals
+  //    - 0% -> one long beep
   // ------------------------------------------------------------------------------------------------
   // Speak battery voltage with long/short beeps.
   void playVoltagePattern(int batteryPercent) {
@@ -141,7 +141,7 @@
     int idx = 0;
 
     if (beepCount == 0) {
-      buzzerPattern[idx++] = 80;
+      buzzerPattern[idx++] = 300;
       buzzerPattern[idx] = 0;
       buzzerTimer = millis();
       tone(pinBuzzer, buzzerPatternToneHz);
@@ -149,8 +149,8 @@
     }
 
     for (int i = 0; i < beepCount && idx < cap; ++i) {
-      if (idx < cap) buzzerPattern[idx++] = 150;
-      if (i < beepCount - 1 && idx < cap) buzzerPattern[idx++] = 150;
+      if (idx < cap) buzzerPattern[idx++] = 300;
+      if (i < beepCount - 1 && idx < cap) buzzerPattern[idx++] = 300;
     }
 
     buzzerPattern[idx] = 0;
@@ -283,16 +283,21 @@
 
     SetGreenLightValue(AutoDistanceOnOff ? 255 : 0);
 
+    // Jog PWM is deliberately separate from manual Speed. Pending reversals and boost also
+    // need their own colors, including when a siren ends or a tilt recovery refreshes the LEDs.
+    RgbColor driveColor = RgbColor::Red;
+    if (motorDrivePending) driveColor = RgbColor::Yellow;
+    else if (boostActive) driveColor = RgbColor::Magenta;
+    else if (motorOutputActive) {
+      driveColor = lastMotorDriveDirection == Dir::Backward ? RgbColor::Blue : RgbColor::White;
+    }
     if (ColorSensorOnOff == 1) {
-      RgbColor driveColor = (Speed == 0) ? RgbColor::Red : (MotorDirection == 2 ? RgbColor::Blue : RgbColor::White);
       SetRGBLightColor(RgbColor::Cyan, 1);
       SetRGBLightColor(driveColor, 2);
       return;
     }
 
-    if (Speed == 0) SetRGBColor(RgbColor::Red);
-    else if (MotorDirection == 2) SetRGBColor(RgbColor::Blue);
-    else SetRGBColor(RgbColor::White);
+    SetRGBColor(driveColor);
   }
 
   // Start a non-blocking 2-pulse acknowledgement blink; final state restored by updateGreenBlink().

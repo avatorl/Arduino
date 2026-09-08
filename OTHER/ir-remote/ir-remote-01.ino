@@ -48,7 +48,7 @@ const int button8 = 82;          // 8 : (wolne)
 const int button9 = 74;          // 9 : (wolne)
 
 // IR sensor pin
-const byte pinIRReceiver = 3;  // (Pin "D0" używany do odbiornika podczerwieni)
+const byte pinIRReceiver = 3;  // (Pin używany do odbiornika podczerwieni)
 
 // get button code from IR Receiver
 uint16_t irReceive() {
@@ -94,7 +94,7 @@ const byte green = 19;
 const byte blue = 1;
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   Serial.println("IR receiver test ready. Press any remote button.");
 
   // initialize LED pins

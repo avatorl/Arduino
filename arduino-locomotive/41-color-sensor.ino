@@ -1,23 +1,29 @@
+  #include <Adafruit_TCS34725.h>
+
   // ================================================================================================
   // File description
   // ================================================================================================
-  // TCS34725 color-sensor driver, track-marker classification, and color-sensor power control.
-  // Split out of the former 40-sensors.ino; the selected distance-sensor backend lives in its
-  // dedicated VL53L0X or VL53L1X tab and the accelerometer in 43-accelerometer.ino.
+  // TCS34725 color-sensor handling, track-marker classification, and color-sensor power control.
+  // The sensor itself is driven by the Adafruit_TCS34725 library; this tab only wires the library
+  // up to the train's sampling schedule, white-balance calibration, and marker action table.
+  // Split out of the former 40-sensors.ino; the distance sensor lives in its dedicated VL53L0X tab.
+  //
+  // Adafruit_TCS34725 library methods used below:
+  //   Adafruit_TCS34725(integration, gain)  // construct with fixed ATIME + gain (see constructor
+  //                                         // call further down). 50 ms + 4x gain matches the
+  //                                  a       // white-balance calibration numbers in config.h.
+  //   begin()      -> Probes the sensor over I2C (address 0x29), verifies the device ID, and
+  //                   programs the integration time / gain passed to the constructor.
+  //   enable()     -> Powers the ADC on so subsequent getRawData() calls return fresh samples.
+  //   disable()    -> Puts the ADC and oscillator back into low-power sleep (~2 uA) between reads.
+  //   getRawData(&r,&g,&b,&c) -> Reads all four 16-bit channels (red, green, blue, clear) in one
+  //                   burst. The values are the raw ADC counts; classifyTrackMarkerColor() below
+  //                   handles white balance, normalization, and cluster matching against config.h.
+  //
+  // Note: the shared I2C bus (Wire.begin, clock, timeout) is configured once in initI2cBus() in
+  // arduino-locomotive.ino before this tab's initColorSensorHardware() runs.
 
-  // TCS34725 color-sensor helper.
-  // This struct is a minimal, hand-written driver for the TCS34725 RGB color sensor, talking to it
-  // directly over I2C register reads/writes instead of using the official "Adafruit_TCS34725"
-  // library. This is intentional: the Adafruit library pulls in extra code/RAM for features this
-  // sketch does not need (gain/integration-time enums, interrupt thresholds, Adafruit_Sensor
-  // framework glue, etc.), and an 8-bit AVR chip like the Nano has very little flash (32 KB) and RAM
-  // (2 KB) to spare. By only implementing the handful of registers actually used here, this driver
-  // keeps the compiled program much smaller.
-  // If you wanted to use the official library instead, the equivalent calls would be:
-  //   Adafruit_TCS34725 tcs(TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X);  // ~= begin_I2C() below
-  //   tcs.begin();          // probes the sensor and configures ATIME/gain, same as begin_I2C()
-  //   tcs.setInterrupt(false);  // roughly equivalent to enable()/disable() below (turns the ADC on/off)
-  //   tcs.getRawData(&r, &g, &b, &c);  // same result as readRawData() below
+  #if 0  // Original hand-written TCS34725 driver preserved in backup\41-color-sensor-custom-driver.ino.
   struct TrainColorSensorTCS34725 {
     static const uint8_t DefaultAddress = 0x29;
     static const uint8_t CommandBit = 0x80;
@@ -36,7 +42,7 @@
 
     // Probe and configure the sensor over I2C.
     // Note: the shared I2C bus itself (Wire.begin, clock speed, timeout) is configured once in
-    // initI2cBus() in arduino-train-v2.ino before any device driver runs - not here.
+    // initI2cBus() in arduino-locomotive.ino before any device driver runs - not here.
     bool begin_I2C(uint8_t i2cAddress = DefaultAddress) {
       address = i2cAddress;
 
@@ -124,9 +130,11 @@
     }
   };
 
+  #endif
+
   // A2 (pinColorSensorLED in config.h) is dedicated to the TCS34725 breakout LED control input in
   // this revision. A2 works fine as a digital output; only A6/A7 on the Nano are analog-input-only.
-  TrainColorSensorTCS34725 colorSensor;
+  Adafruit_TCS34725 colorSensor(TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X);
   bool colorSensorDetected = false;
 
   // TCS34725 Low-Power Sleep / Power-Down Notes:
@@ -150,7 +158,7 @@
     pinMode(pinColorSensorLED, OUTPUT);
     digitalWrite(pinColorSensorLED, colorSensorLEDOffLevel);
 
-    colorSensorDetected = colorSensor.begin_I2C();
+    colorSensorDetected = colorSensor.begin();
     if (colorSensorDetected) {
       colorSensor.disable();  // Keep the sensor IC core in low-power sleep (~2 uA) until enabled
       DBGLN_COLOR_SENSOR(F("TCS34725 ready (in sleep mode)"));
@@ -172,6 +180,9 @@
 
     ColorSensorOnOff = enabled ? 1 : 0;
     digitalWrite(pinColorSensorLED, enabled ? colorSensorLEDOnLevel : colorSensorLEDOffLevel);
+    // During VL53L0X troubleshooting, the A2 illumination toggle is also the user's explicit
+    // request for live ToF diagnostics. In normal builds this call compiles to a no-op.
+    setDistanceSensorDebugSamplingEnabled(enabled);
 
     if (enabled) {
       if (colorSensorDetected) colorSensor.enable();
@@ -330,7 +341,7 @@
     lastColorSensorRead = now;
 
     uint16_t r = 0, g = 0, b = 0, c = 0;
-    colorSensor.readRawData(&r, &g, &b, &c);
+    colorSensor.getRawData(&r, &g, &b, &c);
     uint8_t markerClass = classifyTrackMarkerColor(r, g, b, c);
     #if DEBUG_COLOR_SENSOR
     const __FlashStringHelper* markerLabel = trackMarkerLabel(markerClass);

@@ -14,6 +14,23 @@
 // tried to write to a PROGMEM array, it would silently fail to update it (writes must go through
 // EEPROM instead, or a runtime CPU register, not flash reserved for compiled program code).
 
+// Wake-up jingle (short melody played when the train is ready)
+  const int16_t melodyWakeReady[] PROGMEM = { 988, 120, 1319, 180 };
+
+  // ================================================================================================
+  // Buzzer sound patterns
+  // ================================================================================================
+  const uint16_t pattern_melody[] PROGMEM = { 150, 80, 200, 80, 250, 80, 300, 150, 250, 0 };
+  const uint16_t pattern_batteryWarn[] PROGMEM = { 3000, 100, 0 };
+  const uint16_t pattern_double[] PROGMEM = { 150, 100, 150, 0 };
+  const uint16_t pattern_descend[] PROGMEM = { 120, 80, 120, 80, 120, 0 };
+  const uint16_t pattern_horn[] PROGMEM = { 1000, 100, 0 };
+  const uint16_t pattern_tiltBeep[] PROGMEM = { 1000, 0 };  // single 0.5s beep
+  const uint16_t pattern_autoModeRejected[] PROGMEM = { 500, 0 };  // Single 500 ms rejection beep.
+  const uint16_t pattern_criticalOvervoltage[] PROGMEM = {
+    180, 90, 180, 90, 600, 0
+  };
+
 // Somewhere global or static (C major snippet)
 const int16_t melodyDemo[] PROGMEM = {
   523, 200, 587, 200, 659, 200, 698, 200,  // C D E F (ms each)

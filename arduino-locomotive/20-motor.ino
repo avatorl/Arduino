@@ -5,40 +5,41 @@
   // These settings mainly affect how the train accelerates, brakes, and reverses.
 
   constexpr int AUTO_DISTANCE_INVALID = -1;
+  constexpr int AUTO_DISTANCE_PENDING = -2;  // First measurement is not due yet; not a sensor error.
 
   // Obstacle stop latch for auto-distance hysteresis (see motorVoltageFromDistance() below).
   // true  = the train stopped because an obstacle came closer than AUTO_DISTANCE_STOP and must stay
   //         stopped until the obstacle clears past AUTO_DISTANCE_RESTART.
   // false = normal driving; distance simply scales the speed.
-  // The gap between STOP (8 cm) and RESTART (11 cm) prevents rapid stop/start oscillation when an
+  // The gap between STOP and RESTART prevents rapid stop/start oscillation when an
   // obstacle sits exactly at one threshold (sensor noise would otherwise flip the decision every
   // reading, jerking the train). Reset via resetAutoDistanceState() whenever auto mode is toggled.
   bool autoObstacleStopLatched = false;
 
   // Map obstacle distance to a target motor voltage for auto-distance mode.
   // This function turns a distance reading into a target voltage using simple linear interpolation
-  // ("ramp up smoothly between two points") instead of a lookup table: at or below restartDistanceCm
-  // -> crawl at minMotorMv (the stop decision itself is made by the caller's hysteresis latch, not
-  // here); farther than maxSpeedDistanceCm -> the maximum allowed voltage; in between, the target
-  // voltage rises in a straight line from minMotorMv up to maxMotorMv as the obstacle gets farther
-  // away. All the math is done in integers (no floating point) since AVR chips are slow at
+  // ("ramp up smoothly between two points") instead of a lookup table: at or below
+  // minSpeedDistanceCm -> crawl at minMotorMv (the stop decision itself is made by the caller's
+  // hysteresis latch, not here); farther than maxSpeedDistanceCm -> the maximum allowed voltage;
+  // in between, the target voltage rises in a straight line from minMotorMv up to maxMotorMv as
+  // the obstacle gets farther away. All the math is done in integers (no floating point) since AVR chips are slow at
   // floating-point arithmetic: "spanV"/"spanD" are the total voltage/distance ranges, and
   // "(spanD / 2U)" added before dividing is a standard integer-rounding trick (rounds to the
   // nearest whole number instead of always rounding down).
   uint16_t motorVoltageFromDistanceMm(
     int distanceCm,
-    int restartDistanceCm,
+    int minSpeedDistanceCm,
     int maxSpeedDistanceCm,
     uint16_t minMotorMv,
     uint16_t maxMotorMv
   ) {
-    if (distanceCm <= restartDistanceCm) return minMotorMv;
+    if (distanceCm <= minSpeedDistanceCm) return minMotorMv;
 
     if (distanceCm < maxSpeedDistanceCm) {
       const uint16_t spanV = (uint16_t)(maxMotorMv - minMotorMv);
-      const uint16_t spanD = (uint16_t)(maxSpeedDistanceCm - restartDistanceCm);
+      const uint16_t spanD = (uint16_t)(maxSpeedDistanceCm - minSpeedDistanceCm);
       const uint16_t rawV = (uint16_t)(
-        minMotorMv + (((uint32_t)(distanceCm - restartDistanceCm) * spanV + (spanD / 2U)) / spanD)
+        minMotorMv + (((uint32_t)(distanceCm - minSpeedDistanceCm) * spanV + (spanD / 2U)) / spanD)
       );
       return constrain(rawV, minMotorMv, maxMotorMv);
     }
@@ -74,6 +75,8 @@
   // Clear the momentary jog active flag.
   void cancelJog() {
     momentaryActive = false;
+    momentaryRampActive = false;
+    momentaryButton = 0;
   }
 
   // Return a beginner-friendly label for the current manual speed level.
@@ -157,6 +160,7 @@
     if (Speed == 0) Stop();
     else if (MotorDirection == 1) GoForward();
     else if (MotorDirection == 2) GoBackward();
+    refreshDriveLights();
   }
 
   // CH- and CH+ adjust the current drive step through these thin wrappers.
@@ -171,12 +175,11 @@
         SetRGBColor(RgbColor::Yellow);
         // Denial cue: bypass the battery-restriction sound gate so the user still hears it.
         playPattern(pattern_tiltBeep, true);
+        return;  // Do not overwrite the denial color/sound by reapplying the unchanged speed.
       } else if ((long)(millis() - boostCooldownEndsAt) >= 0) {
         currentStep = BOOST_SPEED_STEP;
         boostActive = true;
         boostEndsAt = millis() + BOOST_DURATION_MS;
-        SetRGBColor(RgbColor::Magenta);
-        playPattern(pattern_double);
       } else {
         unsigned long remainingMs = boostCooldownEndsAt - millis();
         unsigned long remainingSeconds = (remainingMs + 999UL) / 1000UL;
@@ -186,6 +189,7 @@
         SetRGBColor(RgbColor::Yellow);
         // Denial cue: bypass the battery-restriction sound gate so the user still hears it.
         playPattern(pattern_tiltBeep, true);
+        return;
       }
     }
     applySpeedStep();
@@ -207,11 +211,11 @@
   // Convert obstacle distance into a motor-voltage target with stop/restart hysteresis.
   // Map obstacle distance to a target motor voltage.
   // Hysteresis (the reason STOP and RESTART are two different distances):
-  //   - While driving: an obstacle closer than AUTO_DISTANCE_STOP (8 cm) latches a full stop.
+  //   - While driving: an obstacle closer than AUTO_DISTANCE_STOP (10 cm) latches a full stop.
   //   - While stopped by the latch: the train stays stopped until the obstacle clears past
-  //     AUTO_DISTANCE_RESTART (11 cm); readings inside the 8-11 cm band keep the previous decision.
-  //   - While driving inside the 8-11 cm band (obstacle slowly approaching), the train crawls at
-  //     the minimum voltage until the obstacle either clears or crosses the 8 cm stop line.
+  //     AUTO_DISTANCE_RESTART (12 cm); readings inside the 10-12 cm band keep the previous decision.
+  //   - While driving at or below AUTO_DISTANCE_MIN_SPEED, the train crawls at level 1 until the
+  //     obstacle either clears or crosses the AUTO_DISTANCE_STOP line.
   // Without this band the train would oscillate stop/start when an obstacle sits near a single
   // threshold, because sensor noise flips consecutive readings above/below it.
   uint16_t motorVoltageFromDistance(int distance) {
@@ -223,7 +227,7 @@
     uint16_t maxV = min(NORMAL_MAX_MOTOR_MV, voltageSteps[NORMAL_MAX_SPEED_STEP]);  // ≈6.0V
     return motorVoltageFromDistanceMm(
       distance,
-      AUTO_DISTANCE_RESTART,
+      AUTO_DISTANCE_MIN_SPEED,
       AUTO_DISTANCE_MAX_SPEED,
       minV,
       maxV
@@ -238,21 +242,29 @@
       return;
     }
     int distanceReading = getDistanceReading();
+    // Enabling AUTO on a moving train is a live handoff, not a stop/start. Only a measurement
+    // that is not due yet preserves the old PWM; an actual invalid reading still stops below.
+    if (distanceReading == AUTO_DISTANCE_PENDING) return;
 
     if (distanceReading < 0) {
       pendingMotorStopReason = F("auto: invalid distance sensor");
       SetRGBColor(RgbColor::Red);
       DBGLN_DISTANCE_SENSOR(F("Auto: STOP (invalid distance sensor)"));
-      updateMotorSpeed(0);
+      updateMotorSpeed(0, 0);
       return;
     }
 
-    DBG_DISTANCE_SENSOR(F("Distance: "));
+    // getDistanceReading() logs the full physical range. This value is deliberately the separate
+    // 1..50 cm control value used to select motor speed, so farther targets all mean max speed.
+    DBG_DISTANCE_SENSOR(F("Auto control distance: "));
     DBG_DISTANCE_SENSOR(distanceReading);
     DBGLN_DISTANCE_SENSOR(F(" cm"));
 
     uint16_t targetV = motorVoltageFromDistance(distanceReading);
-    int targetSpeed = safePWMFromVoltage(targetV, getLoadedBatteryVoltageForMotorControl());
+    uint16_t supplyVoltageMv = getLoadedBatteryVoltageForMotorControl();
+    int targetSpeed = safePWMFromVoltage(targetV, supplyVoltageMv);
+    int minimumStartSpeed = safePWMFromVoltage(
+      min(MAX_SAFE_MOTOR_MV, voltageSteps[1]), supplyVoltageMv);
 
     if (targetSpeed == 0) {
       SetRGBColor(RgbColor::Red);
@@ -266,7 +278,7 @@
       DBGLN_DISTANCE_SENSOR(F(" mV)"));
     }
 
-    updateMotorSpeed(targetSpeed);
+    updateMotorSpeed(targetSpeed, minimumStartSpeed);
   }
 
   static unsigned long lastRamp = 0;
@@ -277,7 +289,7 @@
   // below. The gate exists only to pace gradual speed changes (one rampStep every rampDelay ms);
   // letting it delay an emergency stop by up to rampDelay (80 ms) would add several centimetres of
   // travel toward an obstacle at full speed.
-  void updateMotorSpeed(int targetSpeed) {
+  void updateMotorSpeed(int targetSpeed, int minimumStartSpeed) {
     if (targetSpeed == 0) {
       // Skip the repeated Stop() side effects (debug spam, boost bookkeeping) once already stopped.
       if (Speed != 0 || motorDrivePending) {
@@ -287,6 +299,14 @@
         Speed = 0;
         Stop();
       }
+      return;
+    }
+
+    if (Speed == 0) {
+      // The obstacle has cleared: apply at least the first calibrated speed immediately.
+      Speed = min(minimumStartSpeed, targetSpeed);
+      lastRamp = millis();
+      GoForward();
       return;
     }
 
@@ -398,18 +418,28 @@
     }
 
     int safeSpeed = constrain(speed, 0, 255);
+    if (dir != Dir::Stop && safeSpeed > 0) {
+      // Remember actual energized direction even for jogs, which do not alter manual selection.
+      // Start the jog ramp when PWM really begins, not while its reversal delay is counting down.
+      if (momentaryActive && !motorOutputActive) momentaryStartedAt = millis();
+      lastMotorDriveDirection = dir;
+      motorOutputActive = true;
+    } else if (motorOutputActive) {
+      motorStoppedAt = millis();
+      motorOutputActive = false;
+    }
     switch (dir) {
       case Dir::Forward:
-        analogWrite(pinMotor_IN1, safeSpeed);
         analogWrite(pinMotor_IN2, 0);
-        MotorDirection = 1;
+        analogWrite(pinMotor_IN1, safeSpeed);
+        if (!momentaryActive) MotorDirection = 1;
         if (safeSpeed > 0) motorDriveAttemptedSinceFault = true;
         logMotorLevelAndPwm(F("Driving Forward >>>"), currentStep, safeSpeed);
         break;
       case Dir::Backward:
         analogWrite(pinMotor_IN1, 0);
         analogWrite(pinMotor_IN2, safeSpeed);
-        MotorDirection = 2;
+        if (!momentaryActive) MotorDirection = 2;
         if (safeSpeed > 0) motorDriveAttemptedSinceFault = true;
         logMotorLevelAndPwm(F("Driving Backward >>"), currentStep, safeSpeed);
         break;
@@ -429,55 +459,55 @@
     }
   }
 
-  // Direction-safe drive entry points.
-  // Drive the motor forward only after any required reverse-direction cooldown.
+  // Shared direction-safe entry point for manual, automatic, and momentary drive.
   // Reversing a spinning motor's direction instantly can spike current and stress the gears/driver,
   // so this "direction cooldown" state machine inserts a brief coast-and-settle pause whenever the
   // requested direction differs from the direction the motor was actually last driven in. Instead of
   // blocking with delay() (which would freeze the whole sketch, including the IR receiver and
-  // safety checks), it records a future timestamp (motorReverseReadyAt = now + DIR_DELAY) and a
-  // "motorDrivePending" flag; updateMotorReverseCooldown() (called every loop()) then finishes the
-  // job once enough time has passed. Comparing timestamps as "(long)(millis() - target) >= 0"
-  // instead of "millis() >= target" is a standard Arduino idiom that keeps working correctly even
-  // when the millis() counter wraps around back to 0 after about 49 days of uptime.
-  void GoForward() {
-    if (MotorDirection == 2 && Speed > 0) {
-      DBGLN_MOTOR(F("Ignored: cannot switch to FORWARD while moving"));
+  // safety checks), it records the coast start (motorStoppedAt) and a "motorDrivePending" flag;
+  // updateMotorReverseCooldown() (called every loop()) then finishes the
+  // job once enough time has passed. Unsigned elapsed-time subtraction keeps the coast interval
+  // correct even when millis() wraps after about 49 days. Repeated requests never restart it.
+  void requestMotorDrive(Dir dir, int speed) {
+    if (criticalOvervoltageLatched || motorFaultLatched
+        || batteryState == BatteryState::Shutdown || tiltStopLatched || accelerometerTiltStopLatched) {
+      DBGLN_MOTOR(F("Drive request blocked by safety latch"));
+      Stop();
       return;
     }
-    if (MotorDirection == 2 && Speed == 0) {
+    if (speed <= 0 || dir == Dir::Stop) {
       Stop();
-      motorReverseReadyAt = millis() + DIR_DELAY;  // non-blocking settle before reverse drive
-      SetRGBColor(RgbColor::Yellow);
+      return;
     }
-    MotorDirection = 1;
-    if (Speed > 0) {
-      if ((long)(millis() - motorReverseReadyAt) >= 0) setMotor(Dir::Forward, Speed);
-      else motorDrivePending = true;  // drive once the cooldown elapses
+
+    if (lastMotorDriveDirection != Dir::Stop && dir != lastMotorDriveDirection) {
+      if (motorOutputActive) {
+        setMotor(Dir::Stop, 0);  // Coast without discarding the requested PWM or jog heartbeat.
+        if (!momentaryActive) Speed = constrain(speed, 0, 255);
+      }
+      if (millis() - motorStoppedAt < DIR_DELAY) {
+        pendingMotorDirection = dir;
+        pendingMotorPwm = constrain(speed, 0, 255);
+        motorDrivePending = true;
+        SetRGBColor(RgbColor::Yellow);
+        return;
+      }
     }
+    motorDrivePending = false;
+    setMotor(dir, speed);
   }
 
   // Direction-safe drive entry points.
+  // Manual selection may change, but physical direction history survives Stop() and CH resets.
+  void GoForward() {
+    MotorDirection = 1;
+    requestMotorDrive(Dir::Forward, Speed);
+  }
+
   // Drive the motor backward only after any required reverse-direction cooldown.
   void GoBackward() {
-    if (MotorDirection == 1 && Speed > 0) {
-      DBGLN_MOTOR(F("Ignored: cannot switch to BACKWARD while moving"));
-      return;
-    }
-    if (MotorDirection == 1 && Speed == 0) {
-      Stop();
-      motorReverseReadyAt = millis() + DIR_DELAY;  // non-blocking settle before reverse drive
-      SetRGBColor(RgbColor::Yellow);
-    }
     MotorDirection = 2;
-    if (Speed > 0) {
-      if ((long)(millis() - motorReverseReadyAt) >= 0) {
-        setMotor(Dir::Backward, Speed);
-        DBGLN_MOTOR(F("Driving Backward >>"));
-      } else {
-        motorDrivePending = true;  // drive once the cooldown elapses
-      }
-    }
+    requestMotorDrive(Dir::Backward, Speed);
   }
 
   // Coast the motor to an idle state.
@@ -488,48 +518,63 @@
     }
     setMotor(Dir::Stop, 0);
     motorDrivePending = false;  // cancel any deferred reverse drive
+    pendingMotorDirection = Dir::Stop;
+    pendingMotorPwm = 0;
+    cancelJog();  // Every stop, including tilt/battery/fault stops, must disarm the jog ramp.
   }
 
   // Apply a reverse drive that was deferred during the non-blocking direction cooldown.
   // Apply deferred motor drive after direction-change delay.
   void updateMotorReverseCooldown() {
     if (!motorDrivePending) return;
-    if ((long)(millis() - motorReverseReadyAt) < 0) return;
-    motorDrivePending = false;
-    if (Speed <= 0) return;
-    if (MotorDirection == 1) setMotor(Dir::Forward, Speed);
-    else if (MotorDirection == 2) setMotor(Dir::Backward, Speed);
+    updateJogWatchdog();  // A released button must never start later when its coast time expires.
+    if (!motorDrivePending || millis() - motorStoppedAt < DIR_DELAY) return;
+    requestMotorDrive(pendingMotorDirection, pendingMotorPwm);
     refreshDriveLights();
   }
 
-  // Jog motor briefly without changing the stored direction/speed state machine.
-  // Temporary hold-to-run movement helper.
-  // Callers (10-ir-remote.ino buttonBackward/buttonForward) only invoke this while the train is
-  // fully stationary (Speed == 0, auto-distance mode off), so this never has to arbitrate against
-  // an already-running manual or auto drive. Direction is whatever the caller passes in (fixed by
-  // which button was pressed); speed is always the fixed step-1 PWM value (pwmSteps[1]), never the
-  // last-selected manual step, and MotorDirection/Speed are intentionally left untouched since the
-  // jog is momentary and should not persist once the button is released.
-  void JogDrive(Dir dir) {
-    if (criticalOvervoltageLatched) {
-      analogWrite(pinMotor_IN1, 0);
-      analogWrite(pinMotor_IN2, 0);
-      digitalWrite(pinMotorSleep, LOW);
-      applyCriticalOvervoltageOutputs();
-      return;
-    }
+  // Arm one jog consistently for all four buttons. The repeat path only refreshes lastSeen.
+  void startJog(Dir dir, uint8_t button, bool ramp) {
+    momentaryActive = true;
+    momentaryRampActive = ramp;
+    momentaryButton = button;
+    momentaryStartedAt = millis();
+    momentaryLastSeen = momentaryStartedAt;
+    JogDrive(dir, pwmSteps[1]);
+    refreshDriveLights();
+  }
 
-    int jogPWM = pwmSteps[1];
-    if (dir == Dir::Forward) {
-      analogWrite(pinMotor_IN1, jogPWM);
-      analogWrite(pinMotor_IN2, 0);
-      if (jogPWM > 0) motorDriveAttemptedSinceFault = true;
-    } else if (dir == Dir::Backward) {
-      analogWrite(pinMotor_IN1, 0);
-      analogWrite(pinMotor_IN2, jogPWM);
-      if (jogPWM > 0) motorDriveAttemptedSinceFault = true;
-    } else {
-      analogWrite(pinMotor_IN1, 0);
-      analogWrite(pinMotor_IN2, 0);
+  // The single release watchdog covers both active PWM and a jog waiting for reversal.
+  void updateJogWatchdog() {
+    if (momentaryActive && millis() - momentaryLastSeen >= momentaryTimeout) {
+      DBGLN_MOTOR(F("Jog watchdog timeout -> STOP"));
+      Stop();
+      SetRGBColor(RgbColor::Red);
     }
+  }
+
+  // Jog motor briefly without changing the stored direction/speed state machine.
+  // Callers only invoke this while the train is fully stationary and auto mode is off, so a jog
+  // cannot arbitrate against manual or automatic drive. MotorDirection and Speed remain untouched
+  // because the movement must stop when the held button is released.
+  void JogDrive(Dir dir, int jogPWM) {
+    requestMotorDrive(dir, jogPWM);
+  }
+
+  // Increase physical + / - jog PWM linearly from level 1 to the normal maximum, never boost.
+  // This runs from loop() instead of delaying, so IR release detection and all safety checks stay responsive.
+  void updateJogDriveSpeed() {
+    if (!momentaryActive || !momentaryRampActive || !motorOutputActive) return;
+
+    const unsigned long elapsedMs = millis() - momentaryStartedAt;
+    const unsigned long cappedElapsedMs = elapsedMs < MOMENTARY_RAMP_DURATION_MS
+      ? elapsedMs
+      : MOMENTARY_RAMP_DURATION_MS;
+    const int minimumPwm = pwmSteps[1];
+    const int maximumPwm = pwmSteps[NORMAL_MAX_SPEED_STEP];
+    const int jogPwm = minimumPwm + (int)(
+      ((uint32_t)(maximumPwm - minimumPwm) * cappedElapsedMs) / MOMENTARY_RAMP_DURATION_MS
+    );
+    const Dir jogDirection = momentaryButton == buttonPlus ? Dir::Forward : Dir::Backward;
+    JogDrive(jogDirection, jogPwm);
   }

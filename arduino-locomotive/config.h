@@ -15,7 +15,7 @@
 // 1. I2C devices respond at 0x20 / 0x29 / 0x2A / 0x68 after the new 400 kHz bus init
 // 2. Tilt-switch polarity (LOW = upright) on the real switch
 // 3. Distance behavior: stop <8 cm, restart >11 cm, crawl in the 8–11 band; new 8×4 ROI cone coverage vs. floor rejection
-// 4. Auto-mode enable: brief red "waiting for reading" then drive (~100–150 ms)
+// 4. Auto-mode enable: preserve live movement, then adjust on fresh distance; invalid data stops
 // 5. Idle sleep/wake with MPU6050 sleep cycling; heartbeat blink
 // 6. Battery thresholds against a real 2S pack; ADC-saturation log message
 
@@ -28,7 +28,7 @@
 // Safe change: leave enabled unless you also redesign the IR + buzzer timing.
 // Wrong value effect: the remote can stop working while tones or melodies are playing.
 // These "#define NAME" lines (with no value) are feature-switch macros: they must be defined
-// *before* <IRremote.hpp> is included (see the #include order in arduino-train-v2.ino) because the
+// *before* <IRremote.hpp> is included (see the #include order in arduino-locomotive.ino) because the
 // IRremote library reads them at compile time to decide which hardware timer to use and which
 // remote-control protocols to build support for. Arduino's Timer1 and Timer2 are internal hardware
 // counters shared by several features (PWM output, tone(), IRremote's timing); telling IRremote to
@@ -60,16 +60,16 @@
 // ENABLE_EEPROM_LOGGING: it only takes the default value shown here if nothing else already
 // defined it first.
 #ifndef DEBUG_IR_REMOTE
-#define DEBUG_IR_REMOTE 1
+#define DEBUG_IR_REMOTE 0
 #endif
 #ifndef DEBUG_MOTOR
 #define DEBUG_MOTOR 0
 #endif
 #ifndef DEBUG_COLOR_SENSOR
-#define DEBUG_COLOR_SENSOR 1
+#define DEBUG_COLOR_SENSOR 0
 #endif
 #ifndef DEBUG_DISTANCE_SENSOR
-#define DEBUG_DISTANCE_SENSOR 1
+#define DEBUG_DISTANCE_SENSOR 0
 #endif
 #ifndef DEBUG_TILT_SENSOR
 #define DEBUG_TILT_SENSOR 0
@@ -77,17 +77,8 @@
 #ifndef DEBUG_ACCELEROMETER
 #define DEBUG_ACCELEROMETER 0
 #endif
-// Select the installed time-of-flight distance-sensor backend at compile time.
-// 0 = VL53L0X (default); 1 = VL53L1X. Only one driver is compiled.
-// Override this definition from the build system for compatible VL53L1X hardware.
-#ifndef USE_VL53L1X_DISTANCE_SENSOR
-#define USE_VL53L1X_DISTANCE_SENSOR 0
-#endif
-#if USE_VL53L1X_DISTANCE_SENSOR != 0 && USE_VL53L1X_DISTANCE_SENSOR != 1
-#error "USE_VL53L1X_DISTANCE_SENSOR must be 0 (VL53L0X) or 1 (VL53L1X)"
-#endif
 #ifndef DEBUG_POWER_MANAGEMENT
-#define DEBUG_POWER_MANAGEMENT 0
+#define DEBUG_POWER_MANAGEMENT 1
 #endif
 #ifndef DEBUG_LEDS
 #define DEBUG_LEDS 0
@@ -105,7 +96,7 @@
 // 5000 mV supply, because a bench 5 V source would otherwise look like a deeply discharged 2S pack
 // and shut the train down immediately. None of this testing behavior exists in the production
 // build - with 0 the compiler never even sees the testing code paths (see the
-// "#if DISABLE_VOLTAGE_METERING" blocks in 50-power-management.ino and arduino-train-v2.ino).
+// "#if DISABLE_VOLTAGE_METERING" blocks in 50-power-management.ino and arduino-locomotive.ino).
 // Wrong value effect: shipping a build with 1 leaves the train with no battery protection at all.
 #ifndef DISABLE_VOLTAGE_METERING
 #define DISABLE_VOLTAGE_METERING 0
@@ -148,7 +139,7 @@ constexpr int pinMotor_IN2 = 6; // with PWM
 constexpr int pinMotorSleep = 7;
 constexpr int pinMotorFault = 8;
 constexpr int pinBuzzer = 9;
-constexpr int pinTiltSensor = 10;
+constexpr int pinTiltSensor = 12;
 // D11 - unused
 // D12 - unused
 // D13 - unused (built-in LED)
@@ -170,12 +161,14 @@ constexpr uint8_t ledRearRedExpanderPin = 7;
 // --- IR remote mapping ---
 // Button codes for the NEC "Car MP3" handheld remote bundled with this build.
 // Change these only if you swap to a different remote or remap train functions.
-constexpr uint8_t buttonCHminus = 69;   // Speed -
+constexpr uint8_t buttonCHminus = 69;   // Speed down
 constexpr uint8_t buttonCH = 70;        // Stop
-constexpr uint8_t buttonCHplus = 71;    // Speed +
+constexpr uint8_t buttonCHplus = 71;    // Speed up
 constexpr uint8_t buttonBackward = 68;  // Momentary backward jog
 constexpr uint8_t buttonForward = 64;   // Momentary forward jog
 constexpr uint8_t buttonPlayPause = 67; // Auto-speed toggle
+constexpr uint8_t buttonMinus = 7;      // Ramped momentary backwa/rd jog
+constexpr uint8_t buttonPlus = 21;      // Ramped momentary forward jog
 constexpr uint8_t buttonEQ = 9;         // Mute / unmute
 constexpr uint8_t button0 = 22;         // Color sensor ON/OFF
 constexpr uint8_t button100plus = 25;   // Horn
@@ -190,6 +183,8 @@ constexpr uint8_t button7 = 66;         // Play music 7
 constexpr uint8_t button8 = 82;         // Play music 8
 constexpr uint8_t button9 = 74;         // Battery test
 constexpr unsigned long momentaryTimeout = 200UL; // Stop a held jog this long after repeats stop.
+// + and - start at level 1, then reach the normal 6 V maximum while held; only CH+ enables boost.
+constexpr unsigned long MOMENTARY_RAMP_DURATION_MS = 2000UL;
 
 // --- Motor and drive settings ---
 // Manual speed steps are expressed as requested motor voltage, then converted to PWM at runtime
@@ -197,24 +192,25 @@ constexpr unsigned long momentaryTimeout = 200UL; // Stop a held jog this long a
 constexpr unsigned long DIR_DELAY = 1000UL;        // Coast time before reversing direction.
 constexpr unsigned long BOOST_DURATION_MS = 10000UL; // How long level 4 boost may stay active.
 constexpr unsigned long BOOST_COOLDOWN_MS = 50000UL; // Wait time before boost may be used again.
-constexpr uint16_t MAX_SAFE_MOTOR_MV = 7000;         // Hard top voltage request the motor may ever see.
+constexpr uint16_t MAX_SAFE_MOTOR_MV = 7500;         // Hard top voltage request the motor may ever see.
 constexpr uint16_t NORMAL_MAX_MOTOR_MV = 6000;       // Normal top voltage outside boost mode.
 constexpr uint8_t NORMAL_MAX_SPEED_STEP = 3;         // Highest regular manual step.
 constexpr uint8_t BOOST_SPEED_STEP = 4;              // Extra manual step reserved for boost.
-constexpr uint16_t voltageSteps[] = { 0, 3500, 4500, 6000, 7000 }; // Requested motor mV for steps 0..4.
+constexpr uint16_t voltageSteps[] = { 0, 3500, 4500, 6000, 7500 }; // Requested motor mV for steps 0..4.
 constexpr int rampStep = 5;                          // PWM change per auto-speed ramp update.
 constexpr unsigned long rampDelay = 80UL;            // Delay between ramp steps in auto mode.
 // Median of 3 keeps single-sample glitches out while reacting one full sample sooner than a
-// median of 5 (about 100 ms faster at the 50 ms read period) - important for a short DUPLO train
+// median of 5 (about 60 ms faster at the 30 ms read period) - important for a short DUPLO train
 // approaching an obstacle at speed.
 constexpr int AUTO_SAMPLES_FOR_MEDIAN = 3;           // Distance samples kept for median filtering.
 // STOP and RESTART form a hysteresis band (see motorVoltageFromDistance() in 20-motor.ino):
 // the train stops when an obstacle comes closer than STOP and will not move again until the
 // obstacle has cleared past RESTART. The gap prevents rapid stop/start oscillation when an
 // obstacle sits right at the boundary.
-constexpr int AUTO_DISTANCE_STOP = 8;                // Stop auto drive when obstacle is closer than this (cm).
-constexpr int AUTO_DISTANCE_RESTART = 11;            // Start moving again once obstacle clears this distance (cm).
-constexpr int AUTO_DISTANCE_MAX_SPEED = 50;          // Distance at which auto mode may request full normal speed (cm).
+constexpr int AUTO_DISTANCE_STOP = 14;                // Stop auto drive when obstacle is closer than this (cm).
+constexpr int AUTO_DISTANCE_RESTART = 18;            // Start moving again once obstacle clears this distance (cm).
+constexpr int AUTO_DISTANCE_MAX_SPEED = 100;          // Distance at which auto mode may request full normal speed (cm).
+constexpr int AUTO_DISTANCE_MIN_SPEED = 30;          // Distance at which auto mode slows down to the minimal speed (cm).
 
 // --- Sensor settings ---
 // Track-marker classification labels and color-cluster calibration table.
@@ -277,24 +273,11 @@ constexpr uint8_t markerClusterCount = sizeof(markerClusters) / sizeof(markerClu
 
 // Distance-sensor timing and fault handling.
 constexpr uint16_t distanceTofTimeoutMs = 50;           // Timeout for one measurement attempt.
-constexpr uint32_t distanceTofTimingBudgetUs = 33000UL; // Measurement timing budget.
-constexpr uint32_t distanceTofContinuousPeriodMs = 50UL; // Continuous-mode period.
-
-// Distance-sensor detection cone (VL53L1X region of interest).
-// Smaller ROI = narrower cone = better floor and side-wall rejection, but shorter range.
-// Unit: SPADs on the sensor's 16x16 array. The driver clamps width/height to 4..16.
-// Safe change: 4x4 is roughly a 15 degree cone, 16x16 is the full ~27 degrees.
-// The 8-wide x 4-tall window below gives a cone that is wide horizontally (~15-20 degrees, so a
-// DUPLO-width obstacle is still seen when the track curves) but stays short vertically (so the
-// sensor does not stare at the floor in front of the train or at the ceiling).
-// Wrong value effect: a centre far from 199 combined with a small ROI can push the window off the
-// SPAD array, which yields range status 13 and no usable readings at all.
-#if USE_VL53L1X_DISTANCE_SENSOR
-constexpr uint8_t distanceTofRoiWidth = 8;             // Horizontal SPADs: wide to cover curves.
-constexpr uint8_t distanceTofRoiHeight = 4;            // Vertical SPADs: short to reject the floor.
-constexpr uint8_t distanceTofRoiCenterSpad = 199;      // 199 is the array's optical centre.
-#endif
-constexpr unsigned long tofReadEveryMs = 50UL;         // How often the sketch consumes a ToF reading.
+constexpr uint32_t distanceTofTimingBudgetUs = 30000UL; // Measurement timing budget.
+// A 1.0 Mcps return-strength threshold is stable at the required sub-50 cm range.
+constexpr float distanceTofSignalRateLimitMcps = 1.0f;
+constexpr uint32_t distanceTofContinuousPeriodMs = 30UL;
+constexpr unsigned long tofReadEveryMs = distanceTofContinuousPeriodMs; // How often the sketch consumes a ToF reading.
 constexpr unsigned long tofFailureGraceMs = 250UL;     // Keep using the last good reading for this long before declaring a fault.
 // If the sensor never delivers a single valid reading within this time after ranging starts,
 // something is wrong (loose wire, dead sensor) and a distance fault is latched instead of the
@@ -324,7 +307,7 @@ constexpr int8_t mpu6050ForwardAxisSign = 1;  // +1 or -1
 constexpr int8_t mpu6050UprightZSign = 1;     // +1 or -1
 
 // --- Power-management settings ---
-constexpr unsigned long BATTERY_CHECK_INTERVAL_MS = 5000UL;     // Time between parked battery-health checks.
+constexpr unsigned long BATTERY_CHECK_INTERVAL_MS = 15000UL;    // Time between parked battery-health checks.
 constexpr unsigned long BATTERY_WARNING_SIGNAL_MS = 3000UL;     // Length of the warning sound/light signal.
 constexpr unsigned long BATTERY_WARNING_REPEAT_MS = 60000UL;    // How often warning mode reminds the user.
 constexpr unsigned long BATTERY_SHUTDOWN_SIGNAL_MS = 10000UL;   // Length of the final shutdown signal.
@@ -333,10 +316,11 @@ constexpr unsigned long IDLE_SLEEP_HEARTBEAT_MS = 32000UL;      // Sleep heartbe
 constexpr unsigned long IDLE_SLEEP_HEARTBEAT_ON_MS = 100UL;     // Heartbeat pulse ON time.
 constexpr unsigned long idleTimeout = 5UL * 60UL * 1000UL;      // Inactivity time before entering idle sleep.
 constexpr unsigned long IDLE_SLEEP_WARNING_LEAD_MS = 15000UL;   // Blink warning this long before idle sleep.
-constexpr unsigned long loadedBatteryReadEveryMs = 250UL;       // Refresh rate for loaded-voltage reads during driving.
 constexpr uint16_t BATTERY_LOW_WARNING_MV = 7250;               // Enter warning mode below this pack voltage.
 constexpr uint16_t BATTERY_LOW_SHUTDOWN_MV = 6000;              // Emergency pack protection: permanently shut down below this voltage.
 constexpr uint16_t BATTERY_WARNING_RECOVERY_MV = 7350;          // Exit warning mode once the battery recovers above this.
+constexpr uint16_t BATTERY_IMPLAUSIBLE_MV = 5000;               // Below this on a 2S pack = ADC glitch; reject, do not count as low.
+constexpr uint8_t BATTERY_LOW_CONFIRMATION_COUNT = 3;           // Consecutive low battery samples required before warning/shutdown.
 constexpr uint16_t VCC_LOW_SHUTDOWN_MV = 4850;                  // Protect the 16MHz Nano and 5V peripherals before VCC reaches 4.5V.
 constexpr uint8_t VCC_LOW_CONFIRMATION_COUNT = 3;               // Consecutive low VCC samples required before shutdown.
 // Calibrate this to the actual ATmega328P bandgap voltage in microvolts if a multimeter comparison
@@ -387,9 +371,14 @@ static_assert(BATTERY_WARNING_RECOVERY_MV < BATTERY_MAX_VALID_MV, "Recovery thre
 static_assert(BATTERY_LOW_WARNING_MV < BATTERY_WARNING_RECOVERY_MV, "Warning recovery must sit above the warning threshold.");
 static_assert(VCC_CHECK_INTERVAL_MS > 0, "VCC check interval must be nonzero.");
 static_assert(VCC_LOW_CONFIRMATION_COUNT > 0, "VCC low confirmation count must be nonzero.");
+static_assert(BATTERY_LOW_CONFIRMATION_COUNT > 0, "Battery low confirmation count must be nonzero.");
+static_assert(BATTERY_IMPLAUSIBLE_MV < BATTERY_LOW_SHUTDOWN_MV, "Implausible-glitch floor must sit below the shutdown threshold.");
 static_assert(VCC_LOW_SHUTDOWN_MV > 4500, "VCC shutdown threshold must stay above the 16MHz ATmega328P minimum.");
 static_assert(NORMAL_MAX_SPEED_STEP < BOOST_SPEED_STEP, "Boost step must come after the normal top step.");
+static_assert(MOMENTARY_RAMP_DURATION_MS > 0, "Momentary ramp duration must be nonzero.");
 static_assert(AUTO_DISTANCE_STOP < AUTO_DISTANCE_RESTART, "AUTO_DISTANCE_STOP must be below AUTO_DISTANCE_RESTART.");
 static_assert(AUTO_DISTANCE_RESTART < AUTO_DISTANCE_MAX_SPEED, "AUTO_DISTANCE_RESTART must be below AUTO_DISTANCE_MAX_SPEED.");
+static_assert(AUTO_DISTANCE_RESTART <= AUTO_DISTANCE_MIN_SPEED, "AUTO_DISTANCE_MIN_SPEED must not be below AUTO_DISTANCE_RESTART.");
+static_assert(AUTO_DISTANCE_MIN_SPEED < AUTO_DISTANCE_MAX_SPEED, "AUTO_DISTANCE_MIN_SPEED must be below AUTO_DISTANCE_MAX_SPEED.");
 static_assert(IDLE_SLEEP_WARNING_LEAD_MS < idleTimeout, "Idle sleep warning lead must be shorter than the idle timeout.");
 static_assert(sirenFmin < sirenFmax, "Siren minimum frequency must be below the maximum frequency.");

@@ -18,7 +18,7 @@
 
   #if DEBUG_IR_REMOTE
   // "const __FlashStringHelper*" is the type that F("...") strings actually have (see the F() macro
-  // explanation in arduino-train-v2.ino). Returning this type instead of a normal "const char*"
+  // explanation in arduino-locomotive.ino). Returning this type instead of a normal "const char*"
   // means every string below (F("CH-"), F("Stop"), etc.) stays stored in flash instead of being
   // copied into SRAM, and each "switch" acts as a simple lookup table converting a raw button code
   // into its matching text label.
@@ -31,6 +31,8 @@
       case buttonBackward: return F("<<");
       case buttonForward: return F(">>");
       case buttonPlayPause: return F("Play/Pause");
+      case buttonMinus: return F("-");
+      case buttonPlus: return F("+");
       case buttonEQ: return F("EQ");
       case button0: return F("0");
       case button100plus: return F("100+");
@@ -57,6 +59,8 @@
       case buttonBackward: return F("Momentary backward");
       case buttonForward: return F("Momentary forward");
       case buttonPlayPause: return F("Auto-speed toggle, start/stop");
+      case buttonMinus: return F("Ramped backward");
+      case buttonPlus: return F("Ramped forward");
       case buttonEQ: return F("Mute / Unmute");
       case button0: return F("Color sensor ON/OFF");
       case button100plus: return F("Horn");
@@ -90,6 +94,21 @@
     }
   }
 
+  // Only mapped buttons count as activity or alter train state.
+  bool isKnownIRCommand(uint8_t code) {
+    switch (code) {
+      case buttonCHminus: case buttonCH: case buttonCHplus:
+      case buttonBackward: case buttonForward: case buttonPlayPause:
+      case buttonMinus: case buttonPlus: case buttonEQ:
+      case button0: case button100plus: case button200plus:
+      case button1: case button2: case button3: case button4:
+      case button5: case button6: case button7: case button8: case button9:
+        return true;
+      default:
+        return false;
+    }
+  }
+
   // Wrap IRremote so the rest of the sketch sees a simple 8-bit command stream.
   // Decode NEC commands, including repeat frames.
   // The NEC infrared protocol sends one full code when a button is first pressed, then - while the
@@ -98,8 +117,8 @@
   // against a single-bit flag) detects this case, and the code reuses lastIRCommand (the most
   // recent real button code) so callers still know which button is being held.
   // pendingIRCommand is a tiny one-slot queue: some code paths need to "hold onto" a decoded command
-  // for the next call to irReceive() instead of consuming it immediately (see cancelJog()/other
-  // call sites), and this static-like queue variable is how that hand-off happens.
+  // for the next call to irReceive() instead of consuming it immediately (see captureWakeIrCommand()),
+  // and this static-like queue variable is how that hand-off happens.
   uint8_t irReceive() {
     if (pendingIRCommand != 0) {
       uint8_t queuedCommand = pendingIRCommand;
@@ -118,7 +137,11 @@
           lastWasRepeat = true;
           received = lastIRCommand;
         } else {
-          received = IrReceiver.decodedIRData.command;  // 8-bit
+          const uint16_t command = IrReceiver.decodedIRData.command;
+          received = command <= UINT8_MAX && isKnownIRCommand((uint8_t)command)
+            ? (uint8_t)command : 0;
+          // An unknown press invalidates repeat history so its following repeats cannot
+          // masquerade as the previous jog button. It has no application-side effects.
           lastIRCommand = received;
           #if DEBUG_IR_REMOTE
           DBG_IR_REMOTE(F("IR pressed: "));
@@ -138,7 +161,8 @@
   // Decide whether a button press is allowed to clear a motor-driver fault latch.
   bool isMotorControlCommand(uint8_t code) {
     return code == buttonCHminus || code == buttonCH || code == buttonCHplus
-      || code == buttonBackward || code == buttonForward || code == buttonPlayPause;
+      || code == buttonBackward || code == buttonForward || code == buttonPlayPause
+      || code == buttonMinus || code == buttonPlus;
   }
 
   // Central behavior router for the handheld remote.
@@ -154,6 +178,7 @@
       DBGLN_POWER_MANAGEMENT(F("Ignored IR command: critical overvoltage latch"));
       return;
     }
+    if (!isKnownIRCommand(code)) return;
 
     #if DEBUG_IR_REMOTE
     if (code != 0 && !lastWasRepeat) {
@@ -170,21 +195,8 @@
       cancelJog();
     }
 
-    // Ignore repeats for non-jog use cases (prevents CH± spam)
-    if (lastWasRepeat && !momentaryActive) {
-      return;
-    }
-
-    // No new code; if jogging and repeats stopped -> timeout
-    if (code == 0) {
-      if (momentaryActive && (millis() - momentaryLastSeen > momentaryTimeout)) {
-        DBGLN_MOTOR(F("Jog timeout -> STOP"));
-        Stop();
-        SetRGBColor(RgbColor::Red);
-        cancelJog();
-      }
-      return;
-    }
+    // Repeats cannot start an action or re-arm a stopped jog. loop() owns the release timeout.
+    if (lastWasRepeat && (!momentaryActive || code != momentaryButton)) return;
 
     if (batteryState == BatteryState::Shutdown) {
       if (!lastWasRepeat) {
@@ -217,6 +229,26 @@
       return;
     }
 
+    // Matching repeats (or repeated full frames) are only a heartbeat. Do not reset the ramp,
+    // write step-1 PWM, or restart the green acknowledgement animation on every repeat.
+    if (momentaryActive && code == momentaryButton) {
+      momentaryLastSeen = millis();
+      lastActive = momentaryLastSeen;
+      idleSleepWarningIssued = false;
+      return;
+    }
+
+    // Auto distance control owns motor movement, so reject all blocked manual speed and jog commands
+    // with a short audible cue. Stop and the auto-mode toggle remain available so the driver can
+    // always stop.
+    if (AutoDistanceOnOff && (code == buttonCHminus || code == buttonCHplus
+        || code == buttonMinus || code == buttonPlus || code == buttonBackward
+        || code == buttonForward)) {
+      DBGLN_IR_REMOTE(F("Ignored: manual motor control while AUTO is active"));
+      playPattern(pattern_autoModeRejected);
+      return;
+    }
+
     lastActive = millis();
     idleSleepWarningIssued = false;
 
@@ -239,10 +271,6 @@
             decreaseStep();
             DBG_MOTOR(F("Manual Speed Down: "));
             DBGLN_MOTOR(Speed);
-            // decreaseStep() -> applySpeedStep() already stopped or re-drove the motor at the new
-            // step, so only the status light needs updating here (a second GoForward()/GoBackward()
-            // call would just repeat the same I2C/PWM writes and debug output).
-            if (Speed == 0) SetRGBColor(RgbColor::Red);
           } else {
             DBGLN_IR_REMOTE(F("Ignored: Auto-speed active"));
           }
@@ -272,13 +300,30 @@
             increaseStep();
             DBG_MOTOR(F("Manual Speed Up: "));
             DBGLN_MOTOR(Speed);
-            // increaseStep() -> applySpeedStep() already drives the motor in the stored direction,
-            // so only the direction status light needs setting here (calling GoForward()/
-            // GoBackward() again would repeat identical PWM writes and debug output).
-            if (MotorDirection == 1) SetRGBColor(RgbColor::White);
-            if (MotorDirection == 2) SetRGBColor(RgbColor::Blue);
           } else {
             DBGLN_IR_REMOTE(F("Ignored: Auto-speed active"));
+          }
+          break;
+        }
+
+      case buttonMinus:
+        {  // - ramped momentary backward jog
+          if (AutoDistanceOnOff == 0 && Speed == 0) {
+            startJog(Dir::Backward, buttonMinus, true);
+            DBGLN_MOTOR(F("Ramped BACKWARD running (hold to accelerate)"));
+          } else {
+            DBGLN_IR_REMOTE(F("Ignored: - only when stationary & not in AUTO"));
+          }
+          break;
+        }
+
+      case buttonPlus:
+        {  // + ramped momentary forward jog
+          if (AutoDistanceOnOff == 0 && Speed == 0) {
+            startJog(Dir::Forward, buttonPlus, true);
+            DBGLN_MOTOR(F("Ramped FORWARD running (hold to accelerate)"));
+          } else {
+            DBGLN_IR_REMOTE(F("Ignored: + only when stationary & not in AUTO"));
           }
           break;
         }
@@ -288,14 +333,10 @@
           // Jog only starts from a fully stationary train: Speed == 0 rules out an active manual
           // forward/backward drive, and AutoDistanceOnOff == 0 rules out auto-distance mode (auto
           // can also leave Speed == 0 momentarily while waiting for an obstacle to clear, so both
-          // checks are required). Direction is fixed by the button pressed; JogDrive() always runs
+          // checks are required). Direction is fixed by the button pressed; this button always runs
           // at the fixed step-1 speed (pwmSteps[1]) regardless of the last selected manual step.
           if (AutoDistanceOnOff == 0 && Speed == 0) {
-            JogDrive(Dir::Backward);
-            SetRGBColor(RgbColor::Blue);
-            momentaryActive = true;
-            momentaryButton = buttonBackward;
-            momentaryLastSeen = millis();
+            startJog(Dir::Backward, buttonBackward, false);
             DBGLN_MOTOR(F("Momentary BACKWARD running (hold to move)"));
           } else {
             DBGLN_IR_REMOTE(F("Ignored: << only when stationary & not in AUTO"));
@@ -308,13 +349,9 @@
           // Same stationary-only guard as buttonBackward above: Speed == 0 blocks jog while a
           // manual drive is running, and AutoDistanceOnOff == 0 blocks jog while auto-distance mode
           // is active (even if it is momentarily stopped at Speed == 0). Direction is fixed by the
-          // button pressed; JogDrive() always runs at the fixed step-1 speed (pwmSteps[1]).
+          // button pressed; this button always runs at the fixed step-1 speed (pwmSteps[1]).
           if (AutoDistanceOnOff == 0 && Speed == 0) {
-            JogDrive(Dir::Forward);
-            SetRGBColor(RgbColor::White);
-            momentaryActive = true;
-            momentaryButton = buttonForward;
-            momentaryLastSeen = millis();
+            startJog(Dir::Forward, buttonForward, false);
             DBGLN_MOTOR(F("Momentary FORWARD running (hold to move)"));
           } else {
             DBGLN_IR_REMOTE(F("Ignored: >> only when stationary & not in AUTO"));
@@ -330,20 +367,26 @@
 
       case buttonPlayPause:
         {  // Auto-speed toggle
-          if (boostActive) Stop();
+          // End boost policy without cutting PWM: AUTO adjusts the existing speed once a
+          // fresh measurement arrives. The cooldown still applies to the boost just used.
+          if (boostActive) {
+            boostActive = false;
+            boostCooldownEndsAt = millis() + BOOST_COOLDOWN_MS;
+            currentStep = NORMAL_MAX_SPEED_STEP;
+          }
           AutoDistanceOnOff = !AutoDistanceOnOff;
           SetGreenLightValue(AutoDistanceOnOff ? 255 : 0);
           if (AutoDistanceOnOff) {
             DBGLN_MOTOR(F("Driving started (auto-speed)"));
             SetRGBColor(RgbColor::White);
-            // SAFETY: do NOT command the motor here. The distance sensor was idle while auto mode
-            // was off, so the last stored reading may be minutes old ("stale") - driving on it
-            // could lurch the train straight into an obstacle that has since appeared. Instead:
-            MotorDirection = 1;                    // auto mode always drives forward
+            // Discard stale readings without interrupting existing manual movement. A stopped
+            // train remains stopped until the first fresh sample; invalid readings still stop
+            // the motor. Preserve physical direction history so AUTO's forward request uses
+            // the normal reversal guard if the motor was last driven backward.
             resetAutoDistanceState();              // clear any stale obstacle-stop latch
             setDistanceSensorRangingActive(true);  // restart ranging + discard stale samples
-            // ...and let updateAutoDistanceSpeed() (called every loop) start the motor only after
-            // a fresh valid distance reading arrives.
+            // ...and let updateAutoDistanceSpeed() adjust live PWM (or start a stopped motor)
+            // only after a fresh valid distance reading arrives.
             playPattern(pattern_double);
           } else {
             DBGLN_MOTOR(F("Driving stopped"));
@@ -389,7 +432,7 @@
         sirenActive = !sirenActive;
         if (!sirenActive) {
           noTone(pinBuzzer);
-          SetRGBColor(RgbColor::Off);
+          refreshDriveLights();
         } else {
           sirenTimer = millis();      // for LED swap
           sirenStartMs = sirenTimer;  // for deterministic audio sweep
@@ -399,15 +442,13 @@
 
       case button9:
         {  // Beep battery level in 10% steps
-          playPattern(pattern_double);
-          waitForPatternPlayback(500);
+          DBGLN_POWER_MANAGEMENT(F("Battery measurement: button 9 status request"));
           uint16_t vIn = getBatteryVoltageSettledForStatus();
           if (criticalOvervoltageLatched) return;
           int batteryPercent = get2SBatteryPercent(vIn);
           DBG_POWER_MANAGEMENT(F("Battery Voltage: "));
-          DBG_POWER_MANAGEMENT(vIn / 1000);
-          DBG_POWER_MANAGEMENT(F("."));
-          DBGLN_POWER_MANAGEMENT((vIn % 1000) / 10);
+          printVoltageMv(vIn);
+          DBGLN_POWER_MANAGEMENT();
           DBG_POWER_MANAGEMENT(F("Battery level: "));
           DBG_POWER_MANAGEMENT(batteryPercent);
           DBGLN_POWER_MANAGEMENT(F("%"));
@@ -422,8 +463,4 @@
         break;
     }
 
-    // Refresh jog heartbeat if the same jog key is still active
-    if (momentaryActive && (code == momentaryButton)) {
-      momentaryLastSeen = millis();
-    }
   }

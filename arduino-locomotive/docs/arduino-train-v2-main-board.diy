@@ -8251,236 +8251,6 @@
       <color hex="000000"/>
       <point x="0.4" y="1.5"/>
     </diylc.connectivity.Dot>
-    <diylc.passive.Resistor>
-      <id>490426a6-d1de-4001-acfc-87a7835b1707</id>
-      <name>R4</name>
-      <alphaPercent>
-        <value>100</value>
-      </alphaPercent>
-      <length value="6.0" unit="mm"/>
-      <width value="2.0" unit="mm"/>
-      <points>
-        <point x="1.2" y="0.8"/>
-        <point x="0.9" y="0.8"/>
-        <point x="1.05" y="0.8"/>
-      </points>
-      <bodyColor hex="82cffd"/>
-      <borderColor hex="5b90b1"/>
-      <labelColor hex="000000"/>
-      <leadColor hex="cccccc"/>
-      <display>NAME</display>
-      <flipStanding>false</flipStanding>
-      <labelOriantation>Directional</labelOriantation>
-      <moveLabel>false</moveLabel>
-      <hideShortLeads>false</hideShortLeads>
-      <power>HALF</power>
-      <colorCode>_5_BAND</colorCode>
-      <shape>Standard</shape>
-    </diylc.passive.Resistor>
-    <diylc.passive.Resistor>
-      <id>294c8645-9728-4f44-8bca-4a8ec26da716</id>
-      <name>R5</name>
-      <alphaPercent>
-        <value>100</value>
-      </alphaPercent>
-      <length value="6.0" unit="mm"/>
-      <width value="2.0" unit="mm"/>
-      <points>
-        <point x="1.2" y="0.9"/>
-        <point x="0.9" y="0.9"/>
-        <point x="1.05" y="0.9"/>
-      </points>
-      <bodyColor hex="82cffd"/>
-      <borderColor hex="5b90b1"/>
-      <labelColor hex="000000"/>
-      <leadColor hex="cccccc"/>
-      <display>NAME</display>
-      <flipStanding>false</flipStanding>
-      <labelOriantation>Directional</labelOriantation>
-      <moveLabel>false</moveLabel>
-      <hideShortLeads>false</hideShortLeads>
-      <power>HALF</power>
-      <colorCode>_5_BAND</colorCode>
-      <shape>Standard</shape>
-    </diylc.passive.Resistor>
-    <diylc.connectivity.Line>
-      <id>1e9946c7-6e5c-4a2a-b18b-1211f7c051f0</id>
-      <name>LN75</name>
-      <alphaPercent>
-        <value>100</value>
-      </alphaPercent>
-      <points>
-        <point x="0.8" y="0.8"/>
-        <point x="0.9" y="0.8"/>
-        <point x="0.0" y="0.0"/>
-      </points>
-      <bodyColor hex="ffffff"/>
-      <borderColor hex="000000"/>
-      <labelColor hex="000000"/>
-      <leadColor hex="cccccc"/>
-      <display>NAME</display>
-      <flipStanding>false</flipStanding>
-      <labelOriantation>Directional</labelOriantation>
-      <moveLabel>false</moveLabel>
-      <hideShortLeads>false</hideShortLeads>
-      <color hex="000000"/>
-      <style>SOLID</style>
-      <thickness value="5.0" unit="px"/>
-      <arrowSize value="5.0" unit="px"/>
-      <arrowStart>false</arrowStart>
-      <arrowEnd>false</arrowEnd>
-    </diylc.connectivity.Line>
-    <diylc.connectivity.Line>
-      <id>9b266b5d-5eaa-4b58-84eb-e41be2e2c97b</id>
-      <name>LN87</name>
-      <alphaPercent>
-        <value>100</value>
-      </alphaPercent>
-      <points>
-        <point x="0.8" y="0.9"/>
-        <point x="0.9" y="0.9"/>
-        <point x="0.0" y="0.0"/>
-      </points>
-      <bodyColor hex="ffffff"/>
-      <borderColor hex="000000"/>
-      <labelColor hex="000000"/>
-      <leadColor hex="cccccc"/>
-      <display>NAME</display>
-      <flipStanding>false</flipStanding>
-      <labelOriantation>Directional</labelOriantation>
-      <moveLabel>false</moveLabel>
-      <hideShortLeads>false</hideShortLeads>
-      <color hex="000000"/>
-      <style>SOLID</style>
-      <thickness value="5.0" unit="px"/>
-      <arrowSize value="5.0" unit="px"/>
-      <arrowStart>false</arrowStart>
-      <arrowEnd>false</arrowEnd>
-    </diylc.connectivity.Line>
-    <diylc.connectivity.Dot>
-      <id>880e6cb1-b9f7-4637-acb1-1c93b07260b7</id>
-      <name>Dot280</name>
-      <size value="1.0" unit="mm"/>
-      <color hex="000000"/>
-      <point x="0.9" y="0.8"/>
-    </diylc.connectivity.Dot>
-    <diylc.connectivity.Dot>
-      <id>430f15dd-cd21-4bbc-90ff-054079e438cc</id>
-      <name>Dot304</name>
-      <size value="1.0" unit="mm"/>
-      <color hex="000000"/>
-      <point x="0.9" y="0.9"/>
-    </diylc.connectivity.Dot>
-    <diylc.connectivity.Line>
-      <id>9f824569-ec2a-490b-bc5f-e08c11420232</id>
-      <name>LN88</name>
-      <alphaPercent>
-        <value>100</value>
-      </alphaPercent>
-      <points>
-        <point x="0.8" y="1.2"/>
-        <point x="1.2" y="1.2"/>
-        <point x="0.0" y="0.0"/>
-      </points>
-      <bodyColor hex="ffffff"/>
-      <borderColor hex="000000"/>
-      <labelColor hex="000000"/>
-      <leadColor hex="cccccc"/>
-      <display>NAME</display>
-      <flipStanding>false</flipStanding>
-      <labelOriantation>Directional</labelOriantation>
-      <moveLabel>false</moveLabel>
-      <hideShortLeads>false</hideShortLeads>
-      <color hex="000000"/>
-      <style>SOLID</style>
-      <thickness value="5.0" unit="px"/>
-      <arrowSize value="5.0" unit="px"/>
-      <arrowStart>false</arrowStart>
-      <arrowEnd>false</arrowEnd>
-    </diylc.connectivity.Line>
-    <diylc.connectivity.Line>
-      <id>312daf90-f2b7-413e-9177-18c42e1b4afd</id>
-      <name>LN89</name>
-      <alphaPercent>
-        <value>100</value>
-      </alphaPercent>
-      <points>
-        <point x="1.2" y="1.2"/>
-        <point x="1.2" y="0.8"/>
-        <point x="0.0" y="0.0"/>
-      </points>
-      <bodyColor hex="ffffff"/>
-      <borderColor hex="000000"/>
-      <labelColor hex="000000"/>
-      <leadColor hex="cccccc"/>
-      <display>NAME</display>
-      <flipStanding>false</flipStanding>
-      <labelOriantation>Directional</labelOriantation>
-      <moveLabel>false</moveLabel>
-      <hideShortLeads>false</hideShortLeads>
-      <color hex="000000"/>
-      <style>SOLID</style>
-      <thickness value="5.0" unit="px"/>
-      <arrowSize value="5.0" unit="px"/>
-      <arrowStart>false</arrowStart>
-      <arrowEnd>false</arrowEnd>
-    </diylc.connectivity.Line>
-    <diylc.connectivity.Dot>
-      <id>2f845bb5-753c-43af-a01b-20d8b8c8d465</id>
-      <name>Dot305</name>
-      <size value="1.0" unit="mm"/>
-      <color hex="000000"/>
-      <point x="1.2" y="0.8"/>
-    </diylc.connectivity.Dot>
-    <diylc.connectivity.Dot>
-      <id>a8b70846-005a-4235-a087-dbb73da6e5c7</id>
-      <name>Dot306</name>
-      <size value="1.0" unit="mm"/>
-      <color hex="000000"/>
-      <point x="1.2" y="0.9"/>
-    </diylc.connectivity.Dot>
-    <diylc.connectivity.Dot>
-      <id>4274295d-3de3-4b47-b09f-6068214d3c7f</id>
-      <name>Dot307</name>
-      <size value="1.0" unit="mm"/>
-      <color hex="000000"/>
-      <point x="1.2" y="1.0"/>
-    </diylc.connectivity.Dot>
-    <diylc.connectivity.Dot>
-      <id>dcba4cbf-5035-48c0-a575-c36ab72d2283</id>
-      <name>Dot309</name>
-      <size value="1.0" unit="mm"/>
-      <color hex="000000"/>
-      <point x="1.2" y="1.1"/>
-    </diylc.connectivity.Dot>
-    <diylc.connectivity.Dot>
-      <id>300d6047-f672-4dff-a748-04faa7cea8bf</id>
-      <name>Dot310</name>
-      <size value="1.0" unit="mm"/>
-      <color hex="000000"/>
-      <point x="1.2" y="1.2"/>
-    </diylc.connectivity.Dot>
-    <diylc.connectivity.Dot>
-      <id>88080b1b-b18e-460f-a69c-73df70bdb885</id>
-      <name>Dot311</name>
-      <size value="1.0" unit="mm"/>
-      <color hex="000000"/>
-      <point x="1.1" y="1.2"/>
-    </diylc.connectivity.Dot>
-    <diylc.connectivity.Dot>
-      <id>a7ad91bd-3cfe-4c20-b9a5-391a40a03893</id>
-      <name>Dot312</name>
-      <size value="1.0" unit="mm"/>
-      <color hex="000000"/>
-      <point x="1.0" y="1.2"/>
-    </diylc.connectivity.Dot>
-    <diylc.connectivity.Dot>
-      <id>0bdea7b1-e743-4b11-894f-6e9042088c6d</id>
-      <name>Dot314</name>
-      <size value="1.0" unit="mm"/>
-      <color hex="000000"/>
-      <point x="0.9" y="1.2"/>
-    </diylc.connectivity.Dot>
     <diylc.passive.RadialCeramicDiskCapacitor>
       <id>32f00c05-f40d-4d47-aae2-a1f013678d0c</id>
       <name>S2</name>
@@ -8541,7 +8311,7 @@
       <point x="1.9" y="0.1"/>
     </diylc.connectivity.Dot>
     <diylc.connectivity.Dot>
-      <id>41983f35-e411-43ea-bbd8-a52a0a3f5620</id>
+      <id>720079c2-2899-4f63-b095-ac95984944bc</id>
       <name>Dot313</name>
       <size value="1.0" unit="mm"/>
       <color hex="000000"/>
@@ -8575,7 +8345,7 @@
       <arrowEnd>false</arrowEnd>
     </diylc.connectivity.Line>
     <diylc.connectivity.Line>
-      <id>809d8a55-75fe-4e4c-bf4a-6e61937bf0a3</id>
+      <id>8c6f7d83-8cf0-4bc4-a274-0138408b847e</id>
       <name>LN93</name>
       <alphaPercent>
         <value>100</value>
@@ -8609,42 +8379,42 @@
       <point x="1.6" y="0.3"/>
     </diylc.connectivity.Dot>
     <diylc.connectivity.Dot>
-      <id>8ef82a65-8e82-4d89-a7bd-5e9cdcfba963</id>
+      <id>0bfd7152-18cb-4efd-aafd-9a8a5f647e72</id>
       <name>Dot316</name>
       <size value="1.0" unit="mm"/>
       <color hex="000000"/>
       <point x="1.5" y="0.1"/>
     </diylc.connectivity.Dot>
     <diylc.connectivity.Dot>
-      <id>8ef82a65-8e82-4d89-a7bd-5e9cdcfba963</id>
+      <id>f6e667b7-3b66-4738-807b-00a9f36ea842</id>
       <name>Dot317</name>
       <size value="1.0" unit="mm"/>
       <color hex="000000"/>
       <point x="1.6" y="0.1"/>
     </diylc.connectivity.Dot>
     <diylc.connectivity.Dot>
-      <id>8ef82a65-8e82-4d89-a7bd-5e9cdcfba963</id>
+      <id>38d7d8d0-15f9-406a-bd15-f843538cd734</id>
       <name>Dot319</name>
       <size value="1.0" unit="mm"/>
       <color hex="000000"/>
       <point x="1.8" y="0.1"/>
     </diylc.connectivity.Dot>
     <diylc.connectivity.Dot>
-      <id>8ef82a65-8e82-4d89-a7bd-5e9cdcfba963</id>
+      <id>705eb293-8f38-4c1a-9fa5-69c622ac4074</id>
       <name>Dot320</name>
       <size value="1.0" unit="mm"/>
       <color hex="000000"/>
       <point x="1.9" y="0.3"/>
     </diylc.connectivity.Dot>
     <diylc.connectivity.Dot>
-      <id>8ef82a65-8e82-4d89-a7bd-5e9cdcfba963</id>
+      <id>af0d3d2e-89d3-493a-97f7-1f6a9183aaba</id>
       <name>Dot321</name>
       <size value="1.0" unit="mm"/>
       <color hex="000000"/>
       <point x="1.8" y="0.3"/>
     </diylc.connectivity.Dot>
     <diylc.connectivity.Dot>
-      <id>8ef82a65-8e82-4d89-a7bd-5e9cdcfba963</id>
+      <id>b588e2cf-8dd8-4cca-9013-3ddd5e9b0b2e</id>
       <name>Dot322</name>
       <size value="1.0" unit="mm"/>
       <color hex="000000"/>

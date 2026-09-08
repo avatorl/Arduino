@@ -16,6 +16,28 @@ This project was rewritten from scratch and extends the original idea with more 
 - Stop or slow down when an obstacle is detected
 - React to colored track markers
 
+## Remote driving
+
+Hold `<<` or `>>` for a fixed-speed backward or forward jog. Hold `-` or `+`
+to ramp from level 1 to the normal 6 V maximum over two seconds. Repeated IR
+frames keep the jog alive without restarting acceleration; loss of the held
+button signal stops it after 200 ms. Only `CH+` can enable timed boost.
+
+Changing direction requires one second of coasting, including after a jog or
+a Stop press. Keep holding a jog button through that pause; releasing it
+cancels the pending movement. Yellow indicates the reversal pause, magenta
+indicates boost, and white/blue indicate forward/backward movement.
+
+Pressing Play/Pause while driving transfers control to AUTO without an
+artificial stop. Boost ends and its cooldown starts; fresh distance readings
+then adjust speed. A stopped train waits for a fresh reading before starting,
+and invalid distance readings still stop the motor. Turning the siren off
+restores the current drive-status colors.
+
+Unmapped commands do not cancel jogging, blink acknowledgment, or reset the
+inactivity timer. NEC addresses identify a command family, not a unique
+physical remote; matching remotes can control the same train.
+
 ## Ideas
 
 - In auto-mode boost when train goes uphill, slow down on downhill (accelerometer + gyroscope)

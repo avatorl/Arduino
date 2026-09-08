@@ -1,4 +1,4 @@
-#if !USE_VL53L1X_DISTANCE_SENSOR
+// Backup of the previous custom register-level VL53L0X driver.
 // ================================================================================================
 // VL53L0X distance-sensor module
 // ================================================================================================
@@ -30,6 +30,7 @@
     static const uint8_t RegisterFinalRangeConfigMinCountRateRtnLimit = 0x44;
     static const uint8_t RegisterMsrcConfigTimeoutMacrop = 0x46;
     static const uint8_t RegisterMsrcConfigControl = 0x60;
+    static const uint8_t RegisterFinalRangeConfigTimeoutMacropHi = 0x71;
     static const uint8_t RegisterSystemHistogramBin = 0x81;
     static const uint8_t RegisterGpioHvMuxActiveHigh = 0x84;
     static const uint8_t RegisterVhvConfigPadSclSdaExtsupHv = 0x89;
@@ -45,6 +46,8 @@
     uint32_t measurementTimingBudgetUs = 33000UL;
     bool didTimeout = false;
     bool lastReadValid = false;
+    uint8_t lastInterruptStatus = 0;
+    uint8_t lastRangeStatus = 0xFF;
     unsigned long timeoutStartMs = 0;
 
     void setTimeout(uint16_t timeoutMs) {
@@ -188,7 +191,7 @@
       if (!writeReg(RegisterGpioHvMuxActiveHigh, (uint8_t)(readReg(RegisterGpioHvMuxActiveHigh) & ~0x10))) return false;
       if (!writeReg(RegisterSystemInterruptClear, 0x01)) return false;
       if (!writeReg(RegisterSystemSequenceConfig, 0xE8)) return false;
-      measurementTimingBudgetUs = 33000UL;
+      if (!setMeasurementTimingBudget(measurementTimingBudgetUs)) return false;
 
       if (!performSingleRefCalibration(0x40)) return false;
       if (!writeReg(RegisterSystemSequenceConfig, 0x02)) return false;
@@ -198,6 +201,22 @@
 
     bool setMeasurementTimingBudget(uint32_t budgetUs) {
       if (budgetUs < 20000UL) return false;
+
+      // The compact driver uses the Pololu/ST default sequence: 14-PCLK pre-range,
+      // 10-PCLK final-range, a 151-MCLK pre-range timeout, and DSS enabled. The
+      // fixed overhead below is the same sequence calculation used by the full driver.
+      constexpr uint32_t DefaultSequenceOverheadUs = 14161UL;
+      constexpr uint16_t PreRangeTimeoutMclks = 151U;
+      constexpr uint32_t FinalRangeMacroPeriodNs = 38131UL;
+      if (budgetUs < DefaultSequenceOverheadUs) return false;
+
+      const uint32_t finalRangeTimeoutMclks =
+        (((budgetUs - DefaultSequenceOverheadUs) * 1000UL
+          + (FinalRangeMacroPeriodNs / 2UL)) / FinalRangeMacroPeriodNs)
+        + PreRangeTimeoutMclks;
+      if (!writeReg16Bit(RegisterFinalRangeConfigTimeoutMacropHi,
+                         encodeTimeout(finalRangeTimeoutMclks))) return false;
+
       measurementTimingBudgetUs = budgetUs;
       return true;
     }
@@ -236,19 +255,24 @@
     // Return immediately when the sensor has completed a continuous measurement. The shared
     // lifecycle polls this before reading, so normal operation never waits for a range result.
     bool sampleReady() {
-      return (readReg(RegisterResultInterruptStatus) & 0x07) != 0;
+      lastInterruptStatus = readReg(RegisterResultInterruptStatus);
+      return (lastInterruptStatus & 0x07) != 0;
     }
 
     uint16_t readRangeContinuousMillimeters() {
       didTimeout = false;
-      if ((readReg(RegisterResultInterruptStatus) & 0x07) == 0) {
+      if (!sampleReady()) {
         lastReadValid = false;
         return 65535;
       }
 
+      // RESULT_RANGE_STATUS contains the completed-sample status in bits 6:3. A status of zero
+      // is the VL53L0X "range valid" result; non-zero values explain why a completed measurement
+      // must not be used for motor control (for example, a weak or phase-inconsistent target).
+      lastRangeStatus = (readReg(RegisterResultRangeStatus) >> 3) & 0x1F;
       uint16_t range = readReg16Bit(RegisterResultRangeStatus + 10);
       writeReg(RegisterSystemInterruptClear, 0x01);
-      lastReadValid = range != 0 && range != 65535;
+      lastReadValid = lastRangeStatus == 0 && range != 0 && range != 65535;
       return range;
     }
 
@@ -260,6 +284,14 @@
 
     bool lastRangeReadValid() const {
       return lastReadValid;
+    }
+
+    uint8_t interruptStatus() const {
+      return lastInterruptStatus;
+    }
+
+    uint8_t rangeStatus() const {
+      return lastRangeStatus;
     }
 
    private:
@@ -365,9 +397,23 @@
       return true;
     }
 
+   public:
     bool setSignalRateLimit(float limitMcps) {
       if (limitMcps < 0.0f || limitMcps > 511.99f) return false;
       return writeReg16Bit(RegisterFinalRangeConfigMinCountRateRtnLimit, (uint16_t)(limitMcps * 128.0f));
+    }
+
+   private:
+    static uint16_t encodeTimeout(uint32_t timeoutMclks) {
+      if (timeoutMclks == 0) return 0;
+
+      uint32_t lowByte = timeoutMclks - 1UL;
+      uint16_t highByte = 0;
+      while ((lowByte & 0xFFFFFF00UL) != 0) {
+        lowByte >>= 1;
+        ++highByte;
+      }
+      return (highByte << 8) | (lowByte & 0xFFU);
     }
 
     bool getSpadInfo(uint8_t* count, bool* typeIsAperture) {
@@ -431,7 +477,7 @@
   }
   // Distance-sensor runtime state and filtering.
   uint8_t Distance = 0;
-  uint8_t distanceBuffer[AUTO_SAMPLES_FOR_MEDIAN];
+  uint16_t distanceBuffer[AUTO_SAMPLES_FOR_MEDIAN];
   uint8_t bufferIndex = 0;
   bool bufferFilled = false;
   bool distanceTofDetected = false;
@@ -446,6 +492,11 @@
   // mode is on (see setDistanceSensorRangingActive()); the sensor stays initialized but idle the
   // rest of the time to save power and I2C traffic.
   bool tofRangingActive = false;
+  #if DEBUG_DISTANCE_SENSOR
+  // A2 drives the color-sensor illumination. During distance-sensor troubleshooting, its enabled
+  // state is also the explicit user request to keep ToF ranging active and print live samples.
+  bool tofDebugSamplingRequested = false;
+  #endif
 
   // Forget all buffered distance samples so the median filter starts fresh.
   // Called whenever ranging (re)starts: samples taken minutes ago (before auto mode was last
@@ -462,13 +513,13 @@
   // for a handful of samples). The "median" (middle value once sorted) is used instead of an average
   // because it ignores one-off spurious readings (e.g. a single bad distance sample) much better
   // than an average would - a classic noise-filtering technique for sensor data.
-  uint8_t medianFromUnsortedSamples(uint8_t* values, uint8_t size) {
+  uint16_t medianFromUnsortedSamples(uint16_t* values, uint8_t size) {
     if (values == nullptr || size == 0) return 0;
 
     for (uint8_t i = 0; i < (uint8_t)(size - 1); ++i) {
       for (uint8_t j = (uint8_t)(i + 1); j < size; ++j) {
         if (values[j] < values[i]) {
-          const uint8_t swap = values[i];
+          const uint16_t swap = values[i];
           values[i] = values[j];
           values[j] = swap;
         }
@@ -486,13 +537,13 @@
   // (i.e., has AUTO_SAMPLES_FOR_MEDIAN real samples yet, vs. still filling up for the first time). A
   // temporary copy is sorted (via medianFromUnsortedSamples above) rather than sorting the ring
   // buffer itself, since sorting would scramble the FIFO order needed for the next overwrite.
-  int pushDistanceSampleAndGetMedian(int raw) {
+  uint16_t pushDistanceSampleAndGetMedian(uint16_t raw) {
     distanceBuffer[bufferIndex] = raw;
     bufferIndex = (bufferIndex + 1) % AUTO_SAMPLES_FOR_MEDIAN;
     if (bufferIndex == 0) bufferFilled = true;
 
     uint8_t size = bufferFilled ? AUTO_SAMPLES_FOR_MEDIAN : bufferIndex;
-    uint8_t temp[AUTO_SAMPLES_FOR_MEDIAN];
+    uint16_t temp[AUTO_SAMPLES_FOR_MEDIAN];
     for (uint8_t i = 0; i < size; i++) temp[i] = distanceBuffer[i];
     return medianFromUnsortedSamples(temp, size);
   }
@@ -540,7 +591,13 @@
       return Distance;
     }
 
+    lastTofReadMs = now;
     if (!distanceTof.sampleReady()) {
+      DBG_DISTANCE_SENSOR(F("VL53L0X waiting: interrupt=0x"));
+      DBG_DISTANCE_SENSOR(distanceTof.interruptStatus(), HEX);
+      DBG_DISTANCE_SENSOR(F(" last-good-age="));
+      DBG_DISTANCE_SENSOR(lastGoodTofReadMs == 0 ? 0 : now - lastGoodTofReadMs);
+      DBGLN_DISTANCE_SENSOR(F(" ms"));
       // No new measurement waiting. This is normal for a poll or two (the sensor's 50 ms
       // measurement cycle drifts against our 50 ms read cycle), so only escalate when it persists.
       if (lastGoodTofReadMs == 0) {
@@ -558,10 +615,16 @@
       handleDistanceSensorFault();
       return AUTO_DISTANCE_INVALID;
     }
-    lastTofReadMs = now;
 
     uint16_t rawMm = distanceTof.readRangeContinuousMillimeters();
     if (!distanceTof.lastRangeReadValid()) {
+      DBG_DISTANCE_SENSOR(F("VL53L0X invalid sample: interrupt=0x"));
+      DBG_DISTANCE_SENSOR(distanceTof.interruptStatus(), HEX);
+      DBG_DISTANCE_SENSOR(F(" status="));
+      DBG_DISTANCE_SENSOR(distanceTof.rangeStatus());
+      DBG_DISTANCE_SENSOR(F(" raw="));
+      DBG_DISTANCE_SENSOR(rawMm);
+      DBGLN_DISTANCE_SENSOR(F(" mm"));
       // A sample WAS ready but its range status marked it unusable (target too weak/ambiguous).
       // Apply the same escalation ladder as the "no sample" branch above.
       if (lastGoodTofReadMs == 0) {
@@ -587,19 +650,31 @@
     // obstacle touching the sensor), never to the far end - an earlier version mapped it to
     // AUTO_DISTANCE_MAX_SPEED, which told the train "50 cm of clear track" while it was pressed
     // against an obstacle.
-    int raw = (int)(rawMm / 10U);
-    if (raw < 1) raw = 1;
-    if (raw > AUTO_DISTANCE_MAX_SPEED) raw = AUTO_DISTANCE_MAX_SPEED;
+    // Keep the physical measurement separate from the motor-control domain. The train only needs
+    // 1..50 cm to select speed, but diagnostic output must show the actual range rather than
+    // falsely reporting every farther target as exactly 50 cm.
+    const uint16_t measuredCm = rawMm / 10U;
+    const uint16_t medianCm = pushDistanceSampleAndGetMedian(measuredCm);
+    const uint8_t controlCm = medianCm < 1
+      ? 1
+      : (medianCm > AUTO_DISTANCE_MAX_SPEED ? AUTO_DISTANCE_MAX_SPEED : (uint8_t)medianCm);
 
-    int median = pushDistanceSampleAndGetMedian(raw);
-    DBG_DISTANCE_SENSOR(F("VL53L0X raw="));
-    DBG_DISTANCE_SENSOR(raw);
-    DBG_DISTANCE_SENSOR(F(" cm  |  median="));
-    DBG_DISTANCE_SENSOR(median);
+    DBG_DISTANCE_SENSOR(F("VL53L0X sample: interrupt=0x"));
+    DBG_DISTANCE_SENSOR(distanceTof.interruptStatus(), HEX);
+    DBG_DISTANCE_SENSOR(F(" status="));
+    DBG_DISTANCE_SENSOR(distanceTof.rangeStatus());
+    DBG_DISTANCE_SENSOR(F(" raw="));
+    DBG_DISTANCE_SENSOR(rawMm);
+    DBG_DISTANCE_SENSOR(F(" mm measured="));
+    DBG_DISTANCE_SENSOR(measuredCm);
+    DBG_DISTANCE_SENSOR(F(" cm median="));
+    DBG_DISTANCE_SENSOR(medianCm);
+    DBG_DISTANCE_SENSOR(F(" cm control="));
+    DBG_DISTANCE_SENSOR(controlCm);
     DBGLN_DISTANCE_SENSOR(F(" cm"));
 
-    Distance = median;
-    return median;
+    Distance = controlCm;
+    return controlCm;
   }
 
   // Initialize the VL53L0X distance sensor.
@@ -645,6 +720,12 @@
       return false;
     }
 
+    if (!distanceTof.setSignalRateLimit(distanceTofSignalRateLimitMcps)) {
+      distanceTofDetected = false;
+      DBGLN_DISTANCE_SENSOR(F("VL53L0X signal-rate limit rejected"));
+      return false;
+    }
+
     if (!distanceTof.setMeasurementTimingBudget(distanceTofTimingBudgetUs)) {
       distanceTofDetected = false;
       DBGLN_DISTANCE_SENSOR(F("VL53L0X timing budget rejected"));
@@ -656,7 +737,11 @@
     resetDistanceFilter();
     lastGoodTofReadMs = 0;
     lastTofReadMs = 0;
+    #if DEBUG_DISTANCE_SENSOR
+    if (AutoDistanceOnOff || tofDebugSamplingRequested) {
+    #else
     if (AutoDistanceOnOff) {
+    #endif
       distanceTof.startContinuous(distanceTofContinuousPeriodMs);
       tofRangingStartedMs = millis();
       tofRangingActive = true;
@@ -670,19 +755,47 @@
   // Start or stop VL53L0X continuous ranging without a full re-initialization.
   void setDistanceSensorRangingActive(bool active) {
     if (!distanceTofDetected) return;  // nothing to control (never found, or fault-latched)
-    if (active == tofRangingActive) return;  // already in the requested state
-    if (active) {
+    #if DEBUG_DISTANCE_SENSOR
+    const bool rangingRequired = active || tofDebugSamplingRequested;
+    #else
+    const bool rangingRequired = active;
+    #endif
+    if (rangingRequired) {
       resetDistanceFilter();
       lastGoodTofReadMs = 0;
       lastTofReadMs = 0;
-      distanceTof.startContinuous(distanceTofContinuousPeriodMs);
-      tofRangingStartedMs = millis();
-      tofRangingActive = true;
-      logDistanceSensorStatus(F(" ranging started"));
-    } else {
+      if (!tofRangingActive) {
+        distanceTof.startContinuous(distanceTofContinuousPeriodMs);
+        tofRangingStartedMs = millis();
+        tofRangingActive = true;
+        logDistanceSensorStatus(F(" ranging started"));
+      }
+    } else if (tofRangingActive) {
       distanceTof.stopContinuous();
       tofRangingActive = false;
       logDistanceSensorStatus(F(" ranging stopped"));
     }
   }
-#endif
+
+  #if DEBUG_DISTANCE_SENSOR
+  // The color-sensor toggle owns A2, so it also owns this diagnostic request. Production builds
+  // compile this function body away and keep their existing auto-distance-only power behavior.
+  void setDistanceSensorDebugSamplingEnabled(bool enabled) {
+    if (tofDebugSamplingRequested == enabled) return;
+    tofDebugSamplingRequested = enabled;
+    DBG_DISTANCE_SENSOR(F("VL53L0X debug sampling "));
+    DBGLN_DISTANCE_SENSOR(enabled ? F("enabled by A2 illumination") : F("disabled by A2 illumination"));
+    setDistanceSensorRangingActive(AutoDistanceOnOff);
+  }
+
+  // Auto mode already consumes samples for motor control. This second consumer exists only while
+  // A2-enabled diagnostics are requested outside auto mode, so it cannot add duplicate I2C reads.
+  void updateDistanceSensorDebugSampling() {
+    if (tofDebugSamplingRequested && !AutoDistanceOnOff && !distanceTofFaultLatched) {
+      getDistanceReading();
+    }
+  }
+  #else
+  void setDistanceSensorDebugSamplingEnabled(bool) {}
+  void updateDistanceSensorDebugSampling() {}
+  #endif
