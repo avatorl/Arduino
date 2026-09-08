@@ -408,7 +408,10 @@ class ProductionContractTests(unittest.TestCase):
             "distanceTof = VL53L0X();",
             "return startDistanceSensorRanging();",
         )
-        self.assertNotIn("setAddress(0x29)", compact(recovery))
+        self.assertEqual(
+            compact(recovery),
+            compact("distanceTof = VL53L0X(); return startDistanceSensorRanging();"),
+        )
 
         idle = function(POWER, "goToIdle")
         self.ordered(
