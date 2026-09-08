@@ -1,6 +1,6 @@
   #include "config.h"
   // Warning: config.h forces IRremote onto Timer1, so do not use analogWrite() on D9 or D10.
-  
+
   // Library includes. Do not include full libraries for all sensors to avoid unnecessary flash and SRAM usage. Use Wire.h for I2C and implement only the register-level access needed for each sensor.
   // "#include" pastes the contents of another file in at this point before compiling. Wire.h, IRremote.hpp,
   // and LowPower.h are external libraries (code someone else wrote) that add ready-made functions for talking
