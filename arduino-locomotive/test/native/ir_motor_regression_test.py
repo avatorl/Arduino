@@ -341,6 +341,37 @@ class ProductionContractTests(unittest.TestCase):
                       "batteryState == BatteryState::Shutdown", "tiltStopLatched", "accelerometerTiltStopLatched")
         self.ordered(guard, "Stop();", "return;")
 
+    def test_vin_shutdown_window_is_independent_of_vcc_shutdown(self):
+        self.contains(
+            CONFIG,
+            "#define ENABLE_VIN_BATTERY_SHUTDOWN 1",
+            "#define ENABLE_VCC_POWER_SHUTDOWN 0",
+            "#define ENABLE_OVERVOLTAGE_POWER_SHUTDOWN 0",
+            "VIN_BATTERY_SHUTDOWN_MIN_MV = 5500",
+            "VIN_BATTERY_SHUTDOWN_MAX_MV = 6500",
+        )
+        self.contains(
+            function(POWER, "isVinBatteryShutdownEligible"),
+            "voltageMv > VIN_BATTERY_SHUTDOWN_MIN_MV",
+            "voltageMv < VIN_BATTERY_SHUTDOWN_MAX_MV",
+        )
+        self.contains(
+            function(MAIN, "setup"),
+            "if (isVinBatteryShutdownEligible(batteryVoltage))",
+            "if (isVinBatteryShutdownEligible(retry))",
+        )
+        self.contains(
+            function(POWER, "updateBatteryGuard"),
+            "else if (isVinBatteryShutdownEligible(v))",
+            "#if ENABLE_VIN_BATTERY_SHUTDOWN",
+            "enterBatteryShutdown();",
+        )
+        self.contains(
+            function(POWER, "updateVccGuard"),
+            "#if ENABLE_VCC_POWER_SHUTDOWN",
+            "enterBatteryShutdown(false, ShutdownCause::LowVcc);",
+        )
+
     def test_reversal_and_deferred_release_use_physical_elapsed_time(self):
         request = function(MOTOR, "requestMotorDrive")
         self.contains(request, "lastMotorDriveDirection != Dir::Stop && dir != lastMotorDriveDirection",

@@ -4,10 +4,6 @@
   // Battery monitoring, low-power policy, sleep / wake flow, and EEPROM event logging live here.
   // These settings mainly affect when the train warns, sleeps, and shuts down to protect the battery.
 
-  // (The battery-percent interpolation itself lives in get2SBatteryPercent() further below; it
-  // reads the PROGMEM lookup table entry-by-entry with pgm_read_word() instead of copying the
-  // whole table onto the stack first, saving 22 bytes of stack per call.)
-
   // Print millivolts as volts with exactly two fractional digits for readable debug output.
   void printVoltageMv(uint16_t voltageMv) {
     DBG_POWER_MANAGEMENT(voltageMv / 1000U);
@@ -107,12 +103,7 @@
       DBG_EEPROM(F("distance sensor missing"));
       first = false;
     }
-    if (flags & ERR_ACCELEROMETER) {
-      if (!first) DBG_EEPROM(F(", "));
-      DBG_EEPROM(F("accelerometer missing"));
-      first = false;
-    }
-    if (flags & (uint8_t)~(ERR_LED_EXPANDER | ERR_COLOR_SENSOR | ERR_DISTANCE_TOF | ERR_ACCELEROMETER)) {
+    if (flags & (uint8_t)~(ERR_LED_EXPANDER | ERR_COLOR_SENSOR | ERR_DISTANCE_TOF)) {
       if (!first) DBG_EEPROM(F(", "));
       DBG_EEPROM(F("unknown flags present"));
     }
@@ -237,7 +228,6 @@
     if (!trainLedExpanderDetected) flags |= ERR_LED_EXPANDER;
     if (!colorSensorDetected)      flags |= ERR_COLOR_SENSOR;
     if (!distanceTofDetected)      flags |= ERR_DISTANCE_TOF;
-    if (!accelerometerDetected)    flags |= ERR_ACCELEROMETER;
 
     // Store voltage as tenths-of-volt (74 = 7.4 V); 0xFF = not measured or invalid for a 2S pack.
     uint8_t battByte = encodeBatteryVoltageForEeprom(batteryVoltage);
@@ -264,7 +254,6 @@
     if (flags & ERR_LED_EXPANDER) { DBGLN_LEDS(F("  ERR 0x01: MCP23008 LED expander not detected")); }
     if (flags & ERR_COLOR_SENSOR) { DBGLN_LEDS(F("  ERR 0x02: TCS34725 color sensor not detected")); }
     if (flags & ERR_DISTANCE_TOF) { DBGLN_LEDS(F("  ERR 0x04: distance sensor not detected")); }
-    if (flags & ERR_ACCELEROMETER) { DBGLN_LEDS(F("  ERR 0x08: MPU6050 accelerometer not detected")); }
     if (flags == 0) { DBGLN_LEDS(F("  All sensors OK")); }
     #endif
 
@@ -373,11 +362,24 @@
     return voltageMv > BATTERY_MAX_VALID_MV;
   }
 
+  bool isVinBatteryShutdownEligible(uint16_t voltageMv) {
+    return voltageMv > BATTERY_IMPLAUSIBLE_MV
+        && voltageMv < VIN_BATTERY_SHUTDOWN_MAX_MV;
+  }
+
   // Latch a critical overvoltage fault until the next power cycle.
   // The averageRaw parameter distinguishes ADC saturation (likely disconnected sensor or wiring
   // fault) from genuine overvoltage: if averageRaw >= 1023, the ADC is maxed out and the reading
   // is unreliable; we latch for safety but log it as a meter fault rather than confirmed overvoltage.
   void enterCriticalOvervoltage(uint16_t voltageMv, uint16_t averageRaw) {
+    #if !ENABLE_OVERVOLTAGE_POWER_SHUTDOWN
+    // The BMS owns pack protection in this configuration, so no voltage reading may turn the
+    // firmware into its final no-recovery sleep state.
+    (void)voltageMv;
+    (void)averageRaw;
+    DBGLN_POWER_MANAGEMENT(F("Voltage fault ignored: program shutdown disabled by configuration"));
+    return;
+    #else
     if (criticalOvervoltageLatched) return;
 
     criticalOvervoltageLatched = true;
@@ -391,7 +393,6 @@
     digitalWrite(pinMotorSleep, LOW);
     digitalWrite(pinDistanceSensorXSHUT, LOW);
     distanceTofDetected = false;
-    sleepAccelerometer();  // Nothing will read the MPU-6050 again; park it in low-power sleep.
     powerDownColorSensorCore();
     applyCriticalOvervoltageOutputs();
     playPattern(pattern_criticalOvervoltage, true);
@@ -417,6 +418,7 @@
       DBG_POWER_MANAGEMENT(F(" mV (>8.5V limit); "));
       DBGLN_POWER_MANAGEMENT(F("power cycle required"));
     }
+    #endif
   }
 
   // Enter low-battery warning mode and start its repeating signal.
@@ -546,17 +548,14 @@
       DBG_POWER_MANAGEMENT(F("/"));
       DBG_POWER_MANAGEMENT(VCC_LOW_CONFIRMATION_COUNT);
       DBGLN_POWER_MANAGEMENT(F(")"));
-      if (consecutiveLowVccSamples >= VCC_LOW_CONFIRMATION_COUNT) {
-        enterBatteryShutdown(false, ShutdownCause::LowVcc);
-      }
+      #if ENABLE_VCC_POWER_SHUTDOWN
+        if (consecutiveLowVccSamples >= VCC_LOW_CONFIRMATION_COUNT) {
+          enterBatteryShutdown(false, ShutdownCause::LowVcc);
+        }
+      #endif
     } else {
       consecutiveLowVccSamples = 0;
     }
-  }
-
-  // Read one battery-percent lookup-table entry from PROGMEM.
-  uint16_t batteryPercentVoltageAt(uint8_t index) {
-    return pgm_read_word(&batteryPercentMvTable[index]);
   }
 
   // Enter inactivity sleep and stay there until a valid wake command is captured.
@@ -577,10 +576,6 @@
     playPattern(pattern_descend);
     waitForPatternPlayback(2000);  // Blocking only during power-down so the goodbye jingle can finish cleanly.
     digitalWrite(pinBuzzer, LOW);
-
-    // Park the MPU-6050 in its low-power sleep mode (~5 uA instead of ~3.8 mA) for the whole idle
-    // sleep; wakeAccelerometer() below restores it once the train wakes up.
-    sleepAccelerometer();
 
     DBGLN_IR_REMOTE(F("Entering sleep mode..."));
     for (;;) {
@@ -627,7 +622,6 @@
 
       digitalWrite(pinMotorSleep, HIGH);
       delay(1);  // DRV8833 wake-up time before checking its diagnostic output.
-      wakeAccelerometer();  // Resume MPU-6050 measurements; its configuration survived the sleep.
       initBatteryVoltageMeterHardware();  // ADC was powered down; re-establish the 1.1V reference.
       if (captureWakeIrCommand(250UL)) {
         break;
@@ -684,9 +678,6 @@
   // resolution. As with other integer math in this project, the "+ half-of-divisor" before the
   // final division rounds to the nearest value instead of always truncating downward.
   uint16_t getBatteryVoltageDirect(bool underLoad = false) {
-    #if DISABLE_VOLTAGE_METERING
-    return 5000;  // 5.0V constant
-    #else
     uint16_t rawSamples[BATTERY_ADC_SAMPLES];
 
     // VCC checks temporarily select AVCC to measure the internal bandgap. Re-select the 1.1V
@@ -750,7 +741,6 @@
       enterCriticalOvervoltage(medianVoltageMv, medianRaw);
     }
     return medianVoltageMv;
-    #endif
   }
 
   // Stop loads, let the pack settle, then measure.
@@ -815,7 +805,7 @@
       // Print before the quiet interval. At low serial baud rates the UART remains electrically
       // active for milliseconds after this call, so logging immediately before analogRead() would
       // make the periodic path less quiet than the button-9 path.
-      DBGLN_POWER_MANAGEMENT(F("Battery measurement: periodic safety guard (settling)"));
+      DBGLN_POWER_MANAGEMENT(F("Battery measurement: periodic safety guard"));
       batteryGuardSettling = true;
       batteryGuardSettleStartedMs = millis();
       return;
@@ -832,7 +822,7 @@
       firstLowBatteryVoltageMv = v;
       batteryGuardConfirmingLow = true;
       // Give the UART time to finish this diagnostic line before the independent retry burst.
-      DBGLN_POWER_MANAGEMENT(F("Battery measurement: periodic low-reading confirmation (settling)"));
+      DBGLN_POWER_MANAGEMENT(F("Battery measurement: periodic low-reading confirmation"));
       batteryGuardSettleStartedMs = millis();
       return;
     }
@@ -858,11 +848,6 @@
       configureSpeedSteps();
     }
 
-    #if !DISABLE_VOLTAGE_METERING
-    // PRODUCTION-only low-battery enforcement. In a DISABLE_VOLTAGE_METERING=1 testing build these
-    // checks are compiled out entirely: the assumed constant 5000 mV "reading" from a bench 5 V
-    // supply sits below every 2S threshold and would otherwise trigger an instant false shutdown.
-    //
     // A single low measurement is not trusted: transient ADC disturbances (S/H cross-talk, AREF
     // dips, motor kickback coinciding with the sample window) have been observed to make an entire
     // burst read low even after the median filter in getBatteryVoltageDirect(). We require
@@ -876,9 +861,9 @@
       // Do not advance the low-battery counters; also do not clear them yet - a real deep
       // discharge would just produce another sub-threshold reading next cycle.
       batteryVoltage = previousBatteryVoltage;  // keep the last trusted value visible to the rest of the sketch
-    } else if (v <= BATTERY_LOW_SHUTDOWN_MV) {
+    } else if (isVinBatteryShutdownEligible(v)) {
       if (consecutiveLowBatterySamples < BATTERY_LOW_CONFIRMATION_COUNT) ++consecutiveLowBatterySamples;
-      DBG_POWER_MANAGEMENT(F("Battery below shutdown threshold: "));
+      DBG_POWER_MANAGEMENT(F("Battery in shutdown window: "));
       printVoltageMv(v);
       DBG_POWER_MANAGEMENT(F(" V ("));
       DBG_POWER_MANAGEMENT(consecutiveLowBatterySamples);
@@ -886,7 +871,8 @@
       DBG_POWER_MANAGEMENT(BATTERY_LOW_CONFIRMATION_COUNT);
       DBGLN_POWER_MANAGEMENT(F(")"));
       if (consecutiveLowBatterySamples >= BATTERY_LOW_CONFIRMATION_COUNT) {
-        enterBatteryShutdown();
+        #if ENABLE_VIN_BATTERY_SHUTDOWN
+          enterBatteryShutdown();
       }
     } else if (v <= BATTERY_LOW_WARNING_MV) {
       consecutiveLowBatterySamples = 0;
@@ -902,36 +888,6 @@
       }
     }
     #endif
-  }
-
-  // Map pack voltage to a 0-100% charge estimate for the remote's battery-test readout.
-  // batteryPercentMvTable (config.h) is a small PROGMEM lookup table of voltage breakpoints in
-  // descending order (100%, 90%, 80%, ... down to 0%), since battery voltage doesn't drop in a
-  // straight line as it discharges. This finds which two breakpoints the reading falls between and
-  // linearly interpolates between their percentages (same spirit as motorVoltageFromDistanceMm() in
-  // 20-motor.ino) for a smoother estimate than snapping to the nearest 10% step.
-  // Entries are read one at a time straight from flash via batteryPercentVoltageAt() /
-  // pgm_read_word() instead of copying the whole 22-byte table onto the stack first.
-  int get2SBatteryPercent(uint16_t voltageMv) {
-    const uint16_t maxVolt = batteryPercentVoltageAt(0);
-    const uint16_t minVolt = batteryPercentVoltageAt(batteryPercentTableSize - 1);
-
-    if (voltageMv >= maxVolt) return 100;
-    if (voltageMv <= minVolt) return 0;
-
-    for (uint8_t i = 0; i < (uint8_t)(batteryPercentTableSize - 1); ++i) {
-      const uint16_t vUpper = batteryPercentVoltageAt(i);
-      const uint16_t vLower = batteryPercentVoltageAt(i + 1);
-      if (voltageMv > vLower) {
-        const int pUpper = 100 - (i * 10);
-        const int pLower = pUpper - 10;
-        const long numerator = (long)(voltageMv - vLower) * (long)(pUpper - pLower);
-        const long denominator = (long)(vUpper - vLower);
-        return pLower + (int)(numerator / denominator);
-      }
-    }
-
-    return 0;
   }
 
   // Return the pack voltage used by motor-control calculations.

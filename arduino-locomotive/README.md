@@ -1,53 +1,45 @@
-# Arduino DUPLO Train v2
+# Arduino DUPLO Locomotive
 
-A 3D-printed DUPLO-compatible train powered by an Arduino Nano and controlled by an IR remote.
+A 3D-printed DUPLO-compatible locomotive powered by an Arduino Nano. Drive it
+with an IR remote, or use automatic obstacle-aware speed control.
 
-This project was rewritten from scratch and extends the original idea with more train behavior, more safety checks, and more feedback for the driver.
+## Inside the locomotive
 
-## What the train can do
+The electronics are packaged inside a 3D-printed DUPLO-compatible locomotive body. The Arduino Nano, motor driver, battery power hardware, sensors, LED wiring, and I2C expander are assembled on compact boards within the chassis.
 
-- Drive forward and backward from the IR remote
-- Use 3 normal speed levels plus boost
-- Show headlights, backlights, and color status lights
-- Play horn, siren, and 8 melodies
-- Report battery level with beeps
-- Sleep after inactivity and wake from the remote
-- Stop when tilted onto its side
-- Stop or slow down when an obstacle is detected
-- React to colored track markers
+![Locomotive electronics, view 1](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-ust0wejp8koh1.jpg)
+*Motor and TCS34725 sensor on the bottom.*
+![Locomotive electronics, view 2](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-avz914ohbkoh1.jpg)
+*Battery pack: 2S 18650 cells with BMS, Arduino Nano, and MCP23008/MOSFET LED-control module.*
+![Locomotive electronics, view 3](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-lus9s7xhdkoh1.jpg)
+*TSOP4838 IR receiver.*
+![Locomotive electronics, view 4](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-6howe1a39koh1.jpg)
+*DRV8833 motor driver.*
+![Locomotive electronics, view 5](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-bfgfo89t8koh1.jpg)
+*LS-LISC-V3 USB charger for the 2S 18650 battery pack.*
+![Locomotive electronics, view 6](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-h195qvd9akoh1.jpg)
+*IR receiver, battery-level indicator, buzzer, and on/off button.*
+![Locomotive electronics, view 7](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-hk36mkrfckoh1.jpg)
+*Arduino Nano on perfboard with the tilt sensor and battery-voltage divider.*
+![Locomotive electronics, view 8](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-nld4eoi69koh1.jpg)
+*Component hidden beneath the battery pack.*
+![Locomotive electronics, view 9](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-xtm4e78tbkoh1.jpg)
+*VL53L0X laser distance sensor.*
+![Locomotive electronics, view 10](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-xz6ehgmofkoh1.png)
+*Inside of the Arduino locomotive.*
 
-## Remote driving
+## What it does
 
-Hold `<<` or `>>` for a fixed-speed backward or forward jog. Hold `-` or `+`
-to ramp from level 1 to the normal 6 V maximum over two seconds. Repeated IR
-frames keep the jog alive without restarting acceleration; loss of the held
-button signal stops it after 200 ms. Only `CH+` can enable timed boost.
+- Drives forward and backward at three regular speed levels plus a timed boost.
+- Supports manual driving and automatic obstacle-aware driving.
+- Shows its status with headlights and rear/status LEDs.
+- Plays a horn, siren, melodies, and battery alerts.
+- Stops when tipped over and reacts to coloured track markers.
+- Monitors the 2S battery pack and sleeps after inactivity until a remote command wakes it.
 
-Changing direction requires one second of coasting, including after a jog or
-a Stop press. Keep holding a jog button through that pause; releasing it
-cancels the pending movement. Yellow indicates the reversal pause, magenta
-indicates boost, and white/blue indicate forward/backward movement.
+## What you need
 
-Pressing Play/Pause while driving transfers control to AUTO without an
-artificial stop. Boost ends and its cooldown starts; fresh distance readings
-then adjust speed. A stopped train waits for a fresh reading before starting,
-and invalid distance readings still stop the motor. Turning the siren off
-restores the current drive-status colors.
-
-Unmapped commands do not cancel jogging, blink acknowledgment, or reset the
-inactivity timer. NEC addresses identify a command family, not a unique
-physical remote; matching remotes can control the same train.
-
-## Ideas
-
-- In auto-mode boost when train goes uphill, slow down on downhill (accelerometer + gyroscope)
-- Horn on each loop of the track (gyroscope)
-
-## Hardware used
-
-### Core electronics
-
-- Arduino Nano 3.0 compatible board
+- Arduino Nano-compatible board
 - TSOP4838 IR receiver
 - DRV8833 motor driver
 - DC geared motor, about 3 V to 6 V
@@ -59,54 +51,19 @@ physical remote; matching remotes can control the same train.
 - 2 x 18650 Li-ion cells
 - 2S battery protection module
 - 2S USB charger module
-- Buck converter to 5 V
 - Main power switch
 - Fuse
-
-### Sensors
-
-- VL53L0X distance sensor (default)
+- VL53L0X distance sensor
 - SW-520D tilt sensor
 - TCS34725 color sensor
-
-### Distance-sensor selection
-
-`config.h` selects the time-of-flight backend with
-`USE_VL53L1X_DISTANCE_SENSOR`:
-
-| Value | Distance sensor |
-| --- | --- |
-| `0` (default) | VL53L0X |
-| `1` | VL53L1X |
-
-Connect the selected distance sensor's XSHUT pin to A3. During startup, the
-sketch moves the distance sensor from its default I2C address, `0x29`, to
-`0x2A` before it initializes the TCS34725 color sensor at `0x29`.
-
-### LED control parts
-
 - MCP23008 I2C GPIO expander
 - LED resistors
 - MOSFETs or transistors for custom LED wiring, if needed
-
-### Build materials
-
 - 3D-printed train body and mechanical parts
 - Wires, headers, perfboard or PCB, connectors, and mounting hardware
 
-## Optional parts
-
-You can build a simpler version if you do not need every feature.
-
-- No distance sensor = no obstacle-aware auto driving
-- No `TCS34725` = no color-marker actions
-- No `SW-520D` = no tilt stop
-- No `MCP23008` = a different LED-driving approach is needed
-
 ## Safety
 
-This project uses a 2S Li-ion battery pack, so take battery wiring and protection seriously. Wrong wiring can damage the hardware or create a fire risk.
-
-## Learn more
-
-- Beginner guide: `LEARN.md`
+This project uses a 2S Li-ion battery pack. Use a protected pack, correct
+polarity, a fuse, and suitable wiring. Incorrect battery wiring can damage the
+electronics or create a fire risk.

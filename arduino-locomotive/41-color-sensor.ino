@@ -23,118 +23,9 @@
   // Note: the shared I2C bus (Wire.begin, clock, timeout) is configured once in initI2cBus() in
   // arduino-locomotive.ino before this tab's initColorSensorHardware() runs.
 
-  #if 0  // Original hand-written TCS34725 driver preserved in backup\41-color-sensor-custom-driver.ino.
-  struct TrainColorSensorTCS34725 {
-    static const uint8_t DefaultAddress = 0x29;
-    static const uint8_t CommandBit = 0x80;
-    static const uint8_t CommandAutoIncrement = 0x20;
-    static const uint8_t RegisterEnable = 0x00;
-    static const uint8_t RegisterAtime = 0x01;
-    static const uint8_t RegisterId = 0x12;
-    static const uint8_t RegisterControl = 0x0F;
-    static const uint8_t RegisterClearDataLow = 0x14;
-    static const uint8_t EnablePowerOn = 0x01;
-    static const uint8_t EnableAdc = 0x02;
-    static const uint8_t IntegrationTime50ms = 0xEB;
-    static const uint8_t Gain4x = 0x01;
-
-    uint8_t address = DefaultAddress;
-
-    // Probe and configure the sensor over I2C.
-    // Note: the shared I2C bus itself (Wire.begin, clock speed, timeout) is configured once in
-    // initI2cBus() in arduino-locomotive.ino before any device driver runs - not here.
-    bool begin_I2C(uint8_t i2cAddress = DefaultAddress) {
-      address = i2cAddress;
-
-      uint8_t deviceId = 0;
-      if (!probe()) return false;
-      if (!readRegister(RegisterId, &deviceId)) return false;
-      if (!isSupportedDeviceId(deviceId)) return false;
-      if (!writeRegister(RegisterAtime, IntegrationTime50ms)) return false;
-      return writeRegister(RegisterControl, Gain4x);
-    }
-
-    bool enable() {
-      if (!writeRegister(RegisterEnable, EnablePowerOn)) return false;
-      delay(3);
-      return writeRegister(RegisterEnable, (uint8_t)(EnablePowerOn | EnableAdc));
-    }
-
-    bool disable() {
-      return writeRegister(RegisterEnable, 0x00);
-    }
-
-    bool readRawData(uint16_t* r, uint16_t* g, uint16_t* b, uint16_t* c) {
-      uint8_t raw[8] = { 0 };
-      if (!readRegisters(RegisterClearDataLow, raw, sizeof(raw))) {
-        *r = 0;
-        *g = 0;
-        *b = 0;
-        *c = 0;
-        return false;
-      }
-
-      // The sensor sends each 16-bit color channel as two separate 8-bit bytes, low byte first
-      // ("little-endian"). Combining them back into one 16-bit number uses the same bitmask/shift
-      // idiom seen elsewhere in this codebase (e.g., TrainLedMCP23008 above): "raw[1] << 8" moves
-      // the high byte into the upper 8 bits of a 16-bit value, and "|" merges it with the low byte.
-      *c = (uint16_t)raw[0] | ((uint16_t)raw[1] << 8);
-      *r = (uint16_t)raw[2] | ((uint16_t)raw[3] << 8);
-      *g = (uint16_t)raw[4] | ((uint16_t)raw[5] << 8);
-      *b = (uint16_t)raw[6] | ((uint16_t)raw[7] << 8);
-      return true;
-    }
-
-   private:
-    bool isSupportedDeviceId(uint8_t deviceId) {
-      return deviceId == 0x44 || deviceId == 0x4D || deviceId == 0x10;
-    }
-
-    bool probe() {
-      Wire.beginTransmission(address);
-      return Wire.endTransmission() == 0;
-    }
-
-    bool writeRegister(uint8_t reg, uint8_t value) {
-      Wire.beginTransmission(address);
-      Wire.write((uint8_t)(CommandBit | reg));
-      Wire.write(value);
-      return Wire.endTransmission() == 0;
-    }
-
-    bool readRegister(uint8_t reg, uint8_t* value) {
-      return readRegisters(reg, value, 1);
-    }
-
-    bool readRegisters(uint8_t startReg, uint8_t* buffer, uint8_t length) {
-      Wire.beginTransmission(address);
-      Wire.write((uint8_t)(CommandBit | CommandAutoIncrement | startReg));
-      // Wire.endTransmission(false) sends what was queued but keeps the I2C bus held open with a
-      // "repeated start" instead of a full stop (the plain endTransmission() used elsewhere in this
-      // file releases the bus). This is required here because the sensor needs to see "here's the
-      // register I want, now immediately read back its value" as one unbroken transaction; a
-      // separate stop+start could let another device interrupt in between on a shared bus.
-      if (Wire.endTransmission(false) != 0) return false;
-
-      // Wire.requestFrom(address, length) asks the sensor to send back "length" bytes; the return
-      // value is how many bytes it actually received (compared against the requested length below to
-      // detect a short/failed read). Wire.read() then pops one buffered byte at a time out of the
-      // I2C receive buffer that requestFrom() just filled.
-      uint8_t bytesRead = Wire.requestFrom((int)address, (int)length);
-      if (bytesRead != length) return false;
-
-      for (uint8_t i = 0; i < length; ++i) {
-        buffer[i] = (uint8_t)Wire.read();
-      }
-      return true;
-    }
-  };
-
-  #endif
-
   // A2 (pinColorSensorLED in config.h) is dedicated to the TCS34725 breakout LED control input in
   // this revision. A2 works fine as a digital output; only A6/A7 on the Nano are analog-input-only.
-  Adafruit_TCS34725 colorSensor(TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X);
+  Adafruit_TCS34725 colorSensor(TCS34725_INTEGRATIONTIME_24MS, TCS34725_GAIN_4X);
   bool colorSensorDetected = false;
 
   // TCS34725 Low-Power Sleep / Power-Down Notes:
@@ -304,7 +195,15 @@
         break;
 
       case MarkerRed:
-        DBGLN_COLOR_SENSOR(F("Track action: RED marker (no action defined yet)"));
+        DBGLN_COLOR_SENSOR(F("Track action: RED marker - STOP"));
+          if (AutoDistanceOnOff) {
+            exitAutoDistanceMode();
+            DBGLN_IR_REMOTE(F("Switched from AUTO to MANUAL mode"));
+          }
+          DBGLN_MOTOR(F("STOP pressed -> Motors stopped"));
+          SetRGBColor(RgbColor::Red);
+          stopAndResetStepSelection(true);  // default to forward when stopped
+          break;
         break;
 
       case MarkerGreen:

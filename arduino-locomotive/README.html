@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>README.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> or <div class="page"></div> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="arduino-duplo-train-v2">Arduino DUPLO Train v2</h1>
+<p>A 3D-printed DUPLO-compatible train powered by an Arduino Nano and controlled by an IR remote.</p>
+<p>This project was rewritten from scratch and extends the original idea with more train behavior, more safety checks, and more feedback for the driver.</p>
+<h2 id="inside-the-locomotive">Inside the locomotive</h2>
+<p>The electronics are packaged inside a 3D-printed DUPLO-compatible locomotive body. The Arduino Nano, motor driver, battery power hardware, sensors, LED wiring, and I2C expander are assembled on compact boards within the chassis.</p>
+<p><img src="docs/Inside of the Arduino locomotive _ r_arduino_files/inside-of-the-arduino-locomotive-v0-ust0wejp8koh1.jpg" alt="Locomotive electronics, view 1">
+<img src="docs/Inside of the Arduino locomotive _ r_arduino_files/inside-of-the-arduino-locomotive-v0-avz914ohbkoh1.jpg" alt="Locomotive electronics, view 2">
+<img src="docs/Inside of the Arduino locomotive _ r_arduino_files/inside-of-the-arduino-locomotive-v0-lus9s7xhdkoh1.jpg" alt="Locomotive electronics, view 3"></p>
+<p>More build photos are available in the original Reddit post: <a href="https://www.reddit.com/r/arduino/comments/1wbzata/inside_of_the_arduino_locomotive/">Inside of the Arduino locomotive</a>.</p>
+<h2 id="what-the-train-can-do">What the train can do</h2>
+<ul>
+<li>Drive forward and backward from the IR remote</li>
+<li>Use 3 normal speed levels plus boost</li>
+<li>Show headlights, backlights, and color status lights</li>
+<li>Play horn, siren, and 8 melodies</li>
+<li>Report battery level with beeps</li>
+<li>Sleep after inactivity and wake from the remote</li>
+<li>Stop when tilted onto its side</li>
+<li>Stop or slow down when an obstacle is detected</li>
+<li>React to colored track markers</li>
+</ul>
+<h2 id="remote-driving">Remote driving</h2>
+<p>Hold <code>&lt;&lt;</code> or <code>&gt;&gt;</code> for a fixed-speed backward or forward jog. Hold <code>-</code> or <code>+</code>
+to ramp from level 1 to the normal 6 V maximum over two seconds. Repeated IR
+frames keep the jog alive without restarting acceleration; loss of the held
+button signal stops it after 200 ms. Only <code>CH+</code> can enable timed boost.</p>
+<p>Changing direction requires one second of coasting, including after a jog or
+a Stop press. Keep holding a jog button through that pause; releasing it
+cancels the pending movement. Yellow indicates the reversal pause, magenta
+indicates boost, and white/blue indicate forward/backward movement.</p>
+<p>Pressing Play/Pause while driving transfers control to AUTO without an
+artificial stop. Boost ends and its cooldown starts; fresh distance readings
+then adjust speed. A stopped train waits for a fresh reading before starting,
+and invalid distance readings still stop the motor. Turning the siren off
+restores the current drive-status colors.</p>
+<p>Unmapped commands do not cancel jogging, blink acknowledgment, or reset the
+inactivity timer. NEC addresses identify a command family, not a unique
+physical remote; matching remotes can control the same train.</p>
+<h2 id="hardware-used">Hardware used</h2>
+<h3 id="core-electronics">Core electronics</h3>
+<ul>
+<li>Arduino Nano 3.0 compatible board</li>
+<li>TSOP4838 IR receiver</li>
+<li>DRV8833 motor driver</li>
+<li>DC geared motor, about 3 V to 6 V</li>
+<li>21-button IR remote</li>
+<li>Passive buzzer</li>
+<li>2 common-anode RGB LEDs</li>
+<li>1 green LED</li>
+<li>2 red LEDs</li>
+<li>2 x 18650 Li-ion cells</li>
+<li>2S battery protection module</li>
+<li>2S USB charger module</li>
+<li>Buck converter to 5 V</li>
+<li>Main power switch</li>
+<li>Fuse</li>
+</ul>
+<h3 id="sensors">Sensors</h3>
+<ul>
+<li>VL53L0X distance sensor (default)</li>
+<li>SW-520D tilt sensor</li>
+<li>TCS34725 color sensor</li>
+</ul>
+<h3 id="distance-sensor-selection">Distance-sensor selection</h3>
+<p><code>config.h</code> selects the time-of-flight backend with
+<code>USE_VL53L1X_DISTANCE_SENSOR</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Distance sensor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code> (default)</td>
+<td>VL53L0X</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>VL53L1X</td>
+</tr>
+</tbody>
+</table>
+<p>Connect the selected distance sensor's XSHUT pin to A3. During startup, the
+sketch moves the distance sensor from its default I2C address, <code>0x29</code>, to
+<code>0x2A</code> before it initializes the TCS34725 color sensor at <code>0x29</code>.</p>
+<h3 id="led-control-parts">LED control parts</h3>
+<ul>
+<li>MCP23008 I2C GPIO expander</li>
+<li>LED resistors</li>
+<li>MOSFETs or transistors for custom LED wiring, if needed</li>
+</ul>
+<h3 id="build-materials">Build materials</h3>
+<ul>
+<li>3D-printed train body and mechanical parts</li>
+<li>Wires, headers, perfboard or PCB, connectors, and mounting hardware</li>
+</ul>
+<h2 id="optional-parts">Optional parts</h2>
+<p>You can build a simpler version if you do not need every feature.</p>
+<ul>
+<li>No distance sensor = no obstacle-aware auto driving</li>
+<li>No <code>TCS34725</code> = no color-marker actions</li>
+<li>No <code>SW-520D</code> = no tilt stop</li>
+<li>No <code>MCP23008</code> = a different LED-driving approach is needed</li>
+</ul>
+<h2 id="safety">Safety</h2>
+<p>This project uses a 2S Li-ion battery pack, so take battery wiring and protection seriously. Wrong wiring can damage the hardware or create a fire risk.</p>
+<h2 id="learn-more">Learn more</h2>
+<ul>
+<li>Beginner guide: <code>LEARN.md</code></li>
+</ul>
+
+</body>
+</html>

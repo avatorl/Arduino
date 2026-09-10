@@ -3,30 +3,10 @@
 // included from multiple .ino tabs. Without it, re-including the same file could redefine the
 // same constants twice and fail to compile.
 
-// ================================================================================================
-// File description
-// ================================================================================================
-// Central home for user-changeable train settings.
-// Group settings by module so a train developer can tune wiring, thresholds, timings, calibration,
-// and remote mappings here without hunting through multiple .ino files.
-
-
-// Needs physical hardware verification:
-// 1. I2C devices respond at 0x20 / 0x29 / 0x2A / 0x68 after the new 400 kHz bus init
-// 2. Tilt-switch polarity (LOW = upright) on the real switch
-// 3. Distance behavior: stop <8 cm, restart >11 cm, crawl in the 8–11 band; new 8×4 ROI cone coverage vs. floor rejection
-// 4. Auto-mode enable: preserve live movement, then adjust on fresh distance; invalid data stops
-// 5. Idle sleep/wake with MPU6050 sleep cycling; heartbeat blink
-// 6. Battery thresholds against a real 2S pack; ADC-saturation log message
-
 // ############################################################################
-// # USER SETTINGS SHARED BY MULTIPLE MODULES - SAFE TO CHANGE BEFORE BUILD   #
+// # USER SETTINGS SHARED BY MULTIPLE MODULES                                 #
 // ############################################################################
 
-// IRremote uses Timer1 so Timer2 remains free for tone() on the passive buzzer.
-// Unit: compile-time feature switch.
-// Safe change: leave enabled unless you also redesign the IR + buzzer timing.
-// Wrong value effect: the remote can stop working while tones or melodies are playing.
 // These "#define NAME" lines (with no value) are feature-switch macros: they must be defined
 // *before* <IRremote.hpp> is included (see the #include order in arduino-locomotive.ino) because the
 // IRremote library reads them at compile time to decide which hardware timer to use and which
@@ -34,7 +14,7 @@
 // counters shared by several features (PWM output, tone(), IRremote's timing); telling IRremote to
 // use Timer1 keeps it out of Timer2's way. EXCLUDE_* macros remove unused remote-control protocol
 // decoders to save flash memory, since this train only needs the NEC protocol used by the remote.
-#define IR_USE_AVR_TIMER1
+#define IR_USE_AVR_TIMER1 // IRremote uses Timer1 so Timer2 remains free for tone() on the passive buzzer.
 #define DECODE_NEC
 #define EXCLUDE_UNIVERSAL_PROTOCOLS
 #define EXCLUDE_EXOTIC_PROTOCOLS
@@ -74,9 +54,6 @@
 #ifndef DEBUG_TILT_SENSOR
 #define DEBUG_TILT_SENSOR 0
 #endif
-#ifndef DEBUG_ACCELEROMETER
-#define DEBUG_ACCELEROMETER 0
-#endif
 #ifndef DEBUG_POWER_MANAGEMENT
 #define DEBUG_POWER_MANAGEMENT 1
 #endif
@@ -89,22 +66,16 @@
 #ifndef DEBUG_EEPROM
 #define DEBUG_EEPROM 0
 #endif
-// Bench-testing switch for running the train from a regulated 5 V supply instead of the 2S pack.
-// Unit: 1 = TESTING build, 0 = PRODUCTION build (normal operation on the 2S 18650 battery).
-// When set to 1 the preprocessor completely removes the real battery measurement AND every
-// low-battery warning/shutdown check from the compiled program: the code simply assumes a constant
-// 5000 mV supply, because a bench 5 V source would otherwise look like a deeply discharged 2S pack
-// and shut the train down immediately. None of this testing behavior exists in the production
-// build - with 0 the compiler never even sees the testing code paths (see the
-// "#if DISABLE_VOLTAGE_METERING" blocks in 50-power-management.ino and arduino-locomotive.ino).
-// Wrong value effect: shipping a build with 1 leaves the train with no battery protection at all.
-#ifndef DISABLE_VOLTAGE_METERING
-#define DISABLE_VOLTAGE_METERING 0
+// Permanent software shutdown policies. VIN shutdown protects a connected, discharged pack.
+// VCC and meter-fault shutdowns stay disabled so USB-powered debugging cannot lock out the train.
+#ifndef ENABLE_VIN_BATTERY_SHUTDOWN
+#define ENABLE_VIN_BATTERY_SHUTDOWN 1
 #endif
-#if DISABLE_VOLTAGE_METERING
-// #warning makes the compiler print this note in the build output on every compile, so a testing
-// build can never be created silently by accident.
-#warning "DISABLE_VOLTAGE_METERING=1: TESTING build - battery metering and low-voltage protection are compiled out!"
+#ifndef ENABLE_VCC_POWER_SHUTDOWN
+#define ENABLE_VCC_POWER_SHUTDOWN 1
+#endif
+#ifndef ENABLE_OVERVOLTAGE_POWER_SHUTDOWN
+#define ENABLE_OVERVOLTAGE_POWER_SHUTDOWN 1
 #endif
 
 // --- I2C Addresses ---
@@ -112,7 +83,6 @@
 constexpr uint8_t mcp23008Address = 0x20; // (A0, A1, A2 pulled LOW by default)
 constexpr uint8_t tcs34725Address = 0x29; // TCS34725 RGB color sensor = 0x29 (default)
 constexpr uint8_t distanceSensorAddress = 0x2A; // Distance sensor = 0x2A (changed from default 0x29 using XSHUT pin)
-constexpr uint8_t mpu6050Address = 0x68; // MPU6050 accelerometer = 0x68 (default, AD0 pin LOW)
 
 // --- Pins a builder may want to rewire ---
 // These are the main hardware connections a builder may change before compiling.
@@ -146,7 +116,7 @@ constexpr int pinTiltSensor = 12;
 
 // --- MCP23008 expander pin mapping ---
 // Green LED
-constexpr uint8_t ledGreenExpanderPin = 6;
+constexpr uint8_t ledGreenExpanderPin = 0;
 // RGB LED 1
 constexpr uint8_t led1RedExpanderPin = 1;
 constexpr uint8_t led1GreenExpanderPin = 2;
@@ -189,9 +159,9 @@ constexpr unsigned long MOMENTARY_RAMP_DURATION_MS = 2000UL;
 // --- Motor and drive settings ---
 // Manual speed steps are expressed as requested motor voltage, then converted to PWM at runtime
 // using the current battery voltage. The first entry must stay 0 for "stopped".
-constexpr unsigned long DIR_DELAY = 1000UL;        // Coast time before reversing direction.
-constexpr unsigned long BOOST_DURATION_MS = 10000UL; // How long level 4 boost may stay active.
-constexpr unsigned long BOOST_COOLDOWN_MS = 50000UL; // Wait time before boost may be used again.
+constexpr unsigned long DIR_DELAY = 500UL;        // Coast time before reversing direction.
+constexpr unsigned long BOOST_DURATION_MS = 15000UL; // How long level 4 boost may stay active.
+constexpr unsigned long BOOST_COOLDOWN_MS = 45000UL; // Wait time before boost may be used again.
 constexpr uint16_t MAX_SAFE_MOTOR_MV = 7500;         // Hard top voltage request the motor may ever see.
 constexpr uint16_t NORMAL_MAX_MOTOR_MV = 6000;       // Normal top voltage outside boost mode.
 constexpr uint8_t NORMAL_MAX_SPEED_STEP = 3;         // Highest regular manual step.
@@ -209,7 +179,7 @@ constexpr int AUTO_SAMPLES_FOR_MEDIAN = 3;           // Distance samples kept fo
 // obstacle sits right at the boundary.
 constexpr int AUTO_DISTANCE_STOP = 14;                // Stop auto drive when obstacle is closer than this (cm).
 constexpr int AUTO_DISTANCE_RESTART = 18;            // Start moving again once obstacle clears this distance (cm).
-constexpr int AUTO_DISTANCE_MAX_SPEED = 100;          // Distance at which auto mode may request full normal speed (cm).
+constexpr int AUTO_DISTANCE_MAX_SPEED = 80;          // Distance at which auto mode may request full normal speed (cm).
 constexpr int AUTO_DISTANCE_MIN_SPEED = 30;          // Distance at which auto mode slows down to the minimal speed (cm).
 
 // --- Sensor settings ---
@@ -241,7 +211,7 @@ struct MarkerClusterDefinition {
 };
 
 // Color-sensor sampling and calibration.
-constexpr unsigned long colorSensorReadEveryMs = 60UL; // Time between color-sensor reads.
+constexpr unsigned long colorSensorReadEveryMs = 30UL; // Time between color-sensor reads.
 constexpr uint16_t colorClearMinThreshold = 160;       // Minimum clear-channel brightness before trusting a read.
 constexpr uint16_t colorMatchClearThreshold = 304;     // Extra brightness gate for track-marker matching.
 constexpr float whiteBalanceRedGain = 1.000f;          // Red-channel calibration multiplier.
@@ -263,16 +233,14 @@ const MarkerClusterDefinition markerClusters[] PROGMEM = {
   { MarkerMagenta, { 476, 193, 331 }, 18 },
   { MarkerMagenta, { 488, 186, 326 }, 10 },
   { MarkerOrange, { 542, 254, 204 }, 22 },
-  { MarkerRed, { 514, 180, 305 }, 27 },
-  { MarkerRed, { 550, 191, 259 }, 36 },
-  { MarkerRed, { 572, 176, 252 }, 22 },
+  { MarkerRed, { 623, 161, 216 }, 60 },
   { MarkerYellow, { 420, 368, 212 }, 14 },
   { MarkerYellow, { 432, 353, 215 }, 18 },
 };
 constexpr uint8_t markerClusterCount = sizeof(markerClusters) / sizeof(markerClusters[0]);
 
 // Distance-sensor timing and fault handling.
-constexpr uint16_t distanceTofTimeoutMs = 50;           // Timeout for one measurement attempt.
+constexpr uint16_t distanceTofTimeoutMs = 30;           // Timeout for one measurement attempt.
 constexpr uint32_t distanceTofTimingBudgetUs = 30000UL; // Measurement timing budget.
 // A 1.0 Mcps return-strength threshold is stable at the required sub-50 cm range.
 constexpr float distanceTofSignalRateLimitMcps = 1.0f;
@@ -288,60 +256,45 @@ constexpr unsigned long tofStartupGraceMs = 1000UL;
 constexpr unsigned long TILT_STABLE_MS = 1000UL;
 constexpr unsigned long TILT_QUIET_MS = 500UL;
 
-// MPU-6050 accelerometer sampling and safety thresholds.
-constexpr unsigned long mpu6050ReadEveryMs = 20UL;
-// If an accelerometer read fails (loose wire, I2C glitch) the sketch does not give up forever:
-// it re-probes the chip this often and resumes tilt/crash protection as soon as it answers again.
-constexpr unsigned long mpu6050RetryEveryMs = 5000UL;
-constexpr uint8_t mpu6050AccelConfig = 0x00;       // +/-2 g
-constexpr int16_t mpu6050AccelLsbPerG = 16384;     // +/-2 g scale
-// Keep the degree labels and tangent-squared ratios together: ratios avoid runtime floating-point trigonometry.
-constexpr uint16_t mpu6050TiltTriggerDegrees = 45;
-constexpr uint16_t mpu6050TiltTriggerTanSquaredPermille = 1000;  // tan(45)^2
-constexpr uint16_t mpu6050TiltRecoveryDegrees = 30;
-constexpr uint16_t mpu6050TiltRecoveryTanSquaredPermille = 333;  // tan(30)^2
-constexpr int16_t mpu6050CrashDeltaMg = 600;
-// Confirm these signs from DEBUG_ACCELEROMETER output after physical installation.
-constexpr int8_t mpu6050ForwardAxis = 0;      // 0 = X, 1 = Y
-constexpr int8_t mpu6050ForwardAxisSign = 1;  // +1 or -1
-constexpr int8_t mpu6050UprightZSign = 1;     // +1 or -1
-
 // --- Power-management settings ---
-constexpr unsigned long BATTERY_CHECK_INTERVAL_MS = 15000UL;    // Time between parked battery-health checks.
-constexpr unsigned long BATTERY_WARNING_SIGNAL_MS = 3000UL;     // Length of the warning sound/light signal.
-constexpr unsigned long BATTERY_WARNING_REPEAT_MS = 60000UL;    // How often warning mode reminds the user.
-constexpr unsigned long BATTERY_SHUTDOWN_SIGNAL_MS = 10000UL;   // Length of the final shutdown signal.
-constexpr unsigned long VCC_CHECK_INTERVAL_MS = 100UL;          // Check the Nano 5V rail this often during normal operation.
-constexpr unsigned long IDLE_SLEEP_HEARTBEAT_MS = 32000UL;      // Sleep heartbeat cycle while idling.
+constexpr unsigned long BATTERY_CHECK_INTERVAL_MS = 1000UL;    // Time between parked battery-health checks.
+constexpr unsigned long VCC_CHECK_INTERVAL_MS = 1000UL;          // Check the Nano 5V rail this often during normal operation.
+// After the train idles and enters sleep, it gives a short visual “I’m sleeping but powered” indication every IDLE_SLEEP_HEARTBEAT_MS seconds. The signal is a short IDLE_SLEEP_HEARTBEAT_ON_MS ms red flash at the rear of the locomotive. The front RGB lights and green LED remain off.
+constexpr unsigned long IDLE_SLEEP_HEARTBEAT_MS = 8000UL;      // Sleep heartbeat cycle while idling (use 8-second intervals)
 constexpr unsigned long IDLE_SLEEP_HEARTBEAT_ON_MS = 100UL;     // Heartbeat pulse ON time.
+// If there were no IR remote activity, the train will enter idle sleep after this timeout.
 constexpr unsigned long idleTimeout = 5UL * 60UL * 1000UL;      // Inactivity time before entering idle sleep.
 constexpr unsigned long IDLE_SLEEP_WARNING_LEAD_MS = 15000UL;   // Blink warning this long before idle sleep.
-constexpr uint16_t BATTERY_LOW_WARNING_MV = 7250;               // Enter warning mode below this pack voltage.
-constexpr uint16_t BATTERY_LOW_SHUTDOWN_MV = 6000;              // Emergency pack protection: permanently shut down below this voltage.
-constexpr uint16_t BATTERY_WARNING_RECOVERY_MV = 7350;          // Exit warning mode once the battery recovers above this.
+
+// --- Battery voltage thresholds ---
+// VCC (5V rail) monitoring and shutdown thresholds.
+constexpr uint16_t VCC_LOW_SHUTDOWN_MV = 4600;                  // Protect the 16MHz Nano and 5V peripherals before VCC reaches 4.5V.
 constexpr uint16_t BATTERY_IMPLAUSIBLE_MV = 5000;               // Below this on a 2S pack = ADC glitch; reject, do not count as low.
-constexpr uint8_t BATTERY_LOW_CONFIRMATION_COUNT = 3;           // Consecutive low battery samples required before warning/shutdown.
-constexpr uint16_t VCC_LOW_SHUTDOWN_MV = 4850;                  // Protect the 16MHz Nano and 5V peripherals before VCC reaches 4.5V.
-constexpr uint8_t VCC_LOW_CONFIRMATION_COUNT = 3;               // Consecutive low VCC samples required before shutdown.
-// Calibrate this to the actual ATmega328P bandgap voltage in microvolts if a multimeter comparison
-// shows a material error. VCC mV = VCC_BANDGAP_CALIBRATION_UV * 1023 / ADC_bandgap_reading / 1000.
-constexpr uint32_t VCC_BANDGAP_CALIBRATION_UV = 1100000UL;
+constexpr uint16_t VIN_BATTERY_SHUTDOWN_MAX_MV = 6400;          // Discharged 2S pack upper bound for permanent shutdown.
+constexpr uint16_t BATTERY_LOW_WARNING_MV = 6500;               // Enter warning mode below this pack voltage.
+constexpr uint16_t BATTERY_WARNING_RECOVERY_MV = 6600;          // Exit warning mode once the battery recovers above this.
 // A healthy 2S 18650 pack never exceeds 8.4 V (two cells x 4.2 V full charge). Anything measured
 // above 8.5 V therefore means a genuine overvoltage or a broken/disconnected voltage divider, and
 // the sketch latches a critical-overvoltage fault (see enterCriticalOvervoltage() in
 // 50-power-management.ino). A saturated ADC (raw 1023 = full scale, about 12.2 V with the current
 // divider) cannot be told apart from a broken meter, so the fault log reports both possibilities.
 constexpr uint16_t BATTERY_MAX_VALID_MV = 8500;                 // Above this = overvoltage or broken meter (2S max is 8.4 V).
+
+constexpr unsigned long BATTERY_WARNING_SIGNAL_MS = 3000UL;     // Length of the warning sound/light signal.
+constexpr unsigned long BATTERY_WARNING_REPEAT_MS = 60000UL;    // How often warning mode reminds the user.
+constexpr unsigned long BATTERY_SHUTDOWN_SIGNAL_MS = 10000UL;   // Length of the final shutdown signal.
+
+constexpr uint8_t BATTERY_LOW_CONFIRMATION_COUNT = 3;           // Consecutive low battery samples required before warning/shutdown.
+constexpr uint8_t VCC_LOW_CONFIRMATION_COUNT = 3;               // Consecutive low VCC samples required before shutdown.
+// Calibrate this to the actual ATmega328P bandgap voltage in microvolts if a multimeter comparison
+// shows a material error. VCC mV = VCC_BANDGAP_CALIBRATION_UV * 1023 / ADC_bandgap_reading / 1000.
+
+constexpr uint32_t VCC_BANDGAP_CALIBRATION_UV = 1100000UL;
 // 100K and 10K resistor divider for battery voltage measurement (99K and 9.9k actual values), scale factor = (100K + 10K) / 10K = 11.
 // 11 * 1.1V max reference voltage * 1.01 calibration factor = 12.221
 constexpr uint16_t BATTERY_MILLIVOLT_SCALE_NUMERATOR = 12221;   // ADC-to-millivolt scale for the current resistor divider.
 constexpr int BATTERY_ADC_MAX = 1023;                           // 10-bit ADC full-scale value on the Nano.
 constexpr uint8_t BATTERY_ADC_SAMPLES = 8;                      // ADC samples averaged per battery measurement.
-// 2S battery percentage lookup points from full to empty, used for the remote battery test readout.
-const uint16_t batteryPercentMvTable[] PROGMEM = {
-  8400, 8200, 8050, 7900, 7750, 7600, 7450, 7350, 7250, 7200, 7150
-};
-constexpr uint8_t batteryPercentTableSize = sizeof(batteryPercentMvTable) / sizeof(batteryPercentMvTable[0]);
 
 // --- Lights and sound settings ---
 constexpr int FrontLightOnOff = 1;                  // Master enable for the front RGB headlights.
@@ -357,22 +310,29 @@ constexpr uint16_t BATTERY_ALERT_TONE_HZ = 1500;    // Tone used for low-battery
 constexpr uint16_t buzzerPatternToneHz = 2200;      // Tone used by simple acknowledgement beeps.
 
 // --- Shared safety checks ---
+// Define ENABLE_SHARED_SAFETY_CHECKS=0 in a build override to compile out this block.
+#ifndef ENABLE_SHARED_SAFETY_CHECKS
+#define ENABLE_SHARED_SAFETY_CHECKS 0
+#endif
+
+#if ENABLE_SHARED_SAFETY_CHECKS
 // static_assert(condition, "message") is a *compile-time* check: the compiler evaluates the
 // condition while building the sketch, and if it is false, the build fails immediately with the
 // given message instead of producing a train that could misbehave. Unlike a runtime "if" check,
 // this costs zero flash/RAM and catches a bad configuration (for example, mixed-up threshold
 // constants) before the code is ever uploaded to the Arduino.
-static_assert(BATTERY_LOW_SHUTDOWN_MV < BATTERY_LOW_WARNING_MV, "Shutdown threshold must be below warning threshold.");
+static_assert(VIN_BATTERY_SHUTDOWN_MAX_MV < BATTERY_LOW_WARNING_MV, "VIN shutdown range must sit below the warning threshold.");
 // Guards against debug leftovers: a 2S lithium pack must never be discharged below ~6.0 V, so a
 // warning threshold under 6000 mV can only be an accidental test value (this exact bug shipped
 // once as "BATTERY_LOW_WARNING_MV = 2").
-static_assert(BATTERY_LOW_WARNING_MV >= 6000, "Warning threshold below 6.0 V is unsafe for a 2S pack - debug leftover?");
+static_assert(BATTERY_LOW_WARNING_MV >= 6000, "Warning threshold below 6.0 V is unsafe for a 2S pack.");
 static_assert(BATTERY_WARNING_RECOVERY_MV < BATTERY_MAX_VALID_MV, "Recovery threshold must be below the overvoltage limit.");
 static_assert(BATTERY_LOW_WARNING_MV < BATTERY_WARNING_RECOVERY_MV, "Warning recovery must sit above the warning threshold.");
 static_assert(VCC_CHECK_INTERVAL_MS > 0, "VCC check interval must be nonzero.");
 static_assert(VCC_LOW_CONFIRMATION_COUNT > 0, "VCC low confirmation count must be nonzero.");
 static_assert(BATTERY_LOW_CONFIRMATION_COUNT > 0, "Battery low confirmation count must be nonzero.");
-static_assert(BATTERY_IMPLAUSIBLE_MV < BATTERY_LOW_SHUTDOWN_MV, "Implausible-glitch floor must sit below the shutdown threshold.");
+static_assert(IDLE_SLEEP_HEARTBEAT_MS % 8000UL == 0, "Idle heartbeat period must be a whole number of 8-second sleep intervals.");
+static_assert(BATTERY_IMPLAUSIBLE_MV < VIN_BATTERY_SHUTDOWN_MAX_MV, "Implausible-glitch floor must sit below the VIN shutdown range.");
 static_assert(VCC_LOW_SHUTDOWN_MV > 4500, "VCC shutdown threshold must stay above the 16MHz ATmega328P minimum.");
 static_assert(NORMAL_MAX_SPEED_STEP < BOOST_SPEED_STEP, "Boost step must come after the normal top step.");
 static_assert(MOMENTARY_RAMP_DURATION_MS > 0, "Momentary ramp duration must be nonzero.");
@@ -382,3 +342,4 @@ static_assert(AUTO_DISTANCE_RESTART <= AUTO_DISTANCE_MIN_SPEED, "AUTO_DISTANCE_M
 static_assert(AUTO_DISTANCE_MIN_SPEED < AUTO_DISTANCE_MAX_SPEED, "AUTO_DISTANCE_MIN_SPEED must be below AUTO_DISTANCE_MAX_SPEED.");
 static_assert(IDLE_SLEEP_WARNING_LEAD_MS < idleTimeout, "Idle sleep warning lead must be shorter than the idle timeout.");
 static_assert(sirenFmin < sirenFmax, "Siren minimum frequency must be below the maximum frequency.");
+#endif

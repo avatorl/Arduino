@@ -27,7 +27,6 @@
   //   - 30-lights-and-sounds.ino
   //   - 41-color-sensor.ino
   //   - 42-distance-sensor-vl53l0x.ino
-  //   - 43-accelerometer.ino
   //   - 50-power-management.ino
 
   // ===============================================================================================
@@ -45,7 +44,7 @@
   //   Dir                               - Motor direction state.
 
   // ===============================================================================================
-  #define DEBUG_ANY (DEBUG_COLOR_SENSOR || DEBUG_DISTANCE_SENSOR || DEBUG_IR_REMOTE || DEBUG_TILT_SENSOR || DEBUG_ACCELEROMETER || DEBUG_POWER_MANAGEMENT || DEBUG_EEPROM || DEBUG_MOTOR || DEBUG_LEDS || DEBUG_SOUND)
+  #define DEBUG_ANY (DEBUG_COLOR_SENSOR || DEBUG_DISTANCE_SENSOR || DEBUG_IR_REMOTE || DEBUG_TILT_SENSOR || DEBUG_POWER_MANAGEMENT || DEBUG_EEPROM || DEBUG_MOTOR || DEBUG_LEDS || DEBUG_SOUND)
   // DEBUG_ANY is true (non-zero) if at least one of the per-module DEBUG_* flags from config.h is
   // turned on. It is used just below to decide whether Serial (the USB debug connection) needs to
   // be started at all; if every debug flag is off, the code that would set up Serial is skipped
@@ -74,7 +73,6 @@
   //   Bit 0  0x01  MCP23008 LED expander not detected
   //   Bit 1  0x02  TCS34725 color sensor not detected
   //   Bit 2  0x04  Distance sensor not detected
-  //   Bit 3  0x08  MPU6050 accelerometer not detected
   const uint16_t EEPROM_ADDR_BOOT_COUNT = 0x00;
   const uint8_t  EEPROM_ADDR_LOG_HEAD   = 0x02;
   const uint8_t  EEPROM_ADDR_LOG_BASE   = 0x03;
@@ -89,7 +87,6 @@
   const uint8_t  ERR_LED_EXPANDER = 0x01;
   const uint8_t  ERR_COLOR_SENSOR = 0x02;
   const uint8_t  ERR_DISTANCE_TOF = 0x04;
-  const uint8_t  ERR_ACCELEROMETER = 0x08;
   const uint8_t  EEPROM_EVENT_WARNING  = 0x01;
   const uint8_t  EEPROM_EVENT_SHUTDOWN = 0x02;
   const uint8_t  EEPROM_EVENT_TOF_FAULT = 0x03;
@@ -310,19 +307,13 @@
   void refreshDriveLights();
   uint16_t getBatteryVoltageSettledForStatus();
   void updateBatteryGuard();
+  bool isVinBatteryShutdownEligible(uint16_t voltageMv);
   bool isCriticalOvervoltage(uint16_t voltageMv);
   void enterCriticalOvervoltage(uint16_t voltageMv, uint16_t averageRaw);
   void applyCriticalOvervoltageOutputs();
   void updateGreenBlink();
   void updateMotorReverseCooldown();
   void initDistanceSensorHardware();
-  void initAccelerometerHardware();
-  void updateAccelerometerSafety();
-  // sleepAccelerometer()/wakeAccelerometer() live in 43-accelerometer.ino and are declared here so
-  // earlier-compiled tabs (30-lights-and-sounds.ino, 50-power-management.ino) can park the MPU6050
-  // in its low-power sleep mode during idle sleep and permanent shutdown.
-  void sleepAccelerometer();
-  void wakeAccelerometer();
   bool startDistanceSensorRanging();
   bool recoverDistanceSensorAfterXshut();
   // Starts or stops distance-sensor continuous ranging without a full re-init. Ranging is only needed while
@@ -341,7 +332,6 @@
   void resetAutoDistanceState();
   void stopAndResetStepSelection(bool resetDirection = false);
   void cancelJog();
-  int get2SBatteryPercent(uint16_t voltageMv);
   uint16_t getBatteryVoltageDirect(bool underLoad = false);
   void printVoltageMv(uint16_t voltageMv);
   uint8_t classifyTrackMarkerColor(uint16_t r, uint16_t g, uint16_t b, uint16_t c);
@@ -416,8 +406,8 @@
   //   A1  -> Free analog-input-only pin.
   //   A2  -> TCS34725 breakout LED control output (digital-capable analog pin).
   //   A3  -> Distance-sensor XSHUT output for sensor reset / I2C address setup.
-  //   A4  -> I2C SDA shared by the MCP23008, TCS34725, distance sensor, and MPU6050.
-  //   A5  -> I2C SCL shared by the MCP23008, TCS34725, distance sensor, and MPU6050.
+  //   A4  -> I2C SDA shared by the MCP23008, TCS34725, and distance sensor.
+  //   A5  -> I2C SCL shared by the MCP23008, TCS34725, and distance sensor.
   //   A6  -> Free analog-input-only pin.
   //   A7  -> Free analog-input-only pin.
   // SPI note: SPI is not used in this sketch, but an SPI peripheral would conflict with the buzzer
@@ -535,14 +525,14 @@
   //   TCS34725 LED pin is assumed active-HIGH in this sketch; swap the on/off levels below if your
   //   breakout uses active-LOW LED control instead
   // MCP23008 GPIO allocation:
-  //   MCP GP0     -> RGB LED #1 Red transistor base resistor
-  //   MCP GP1     -> RGB LED #1 Green transistor base resistor
-  //   MCP GP2     -> RGB LED #1 Blue transistor base resistor
-  //   MCP GP3     -> RGB LED #2 Red transistor base resistor
-  //   MCP GP4     -> RGB LED #2 Green transistor base resistor
-  //   MCP GP5     -> RGB LED #2 Blue transistor base resistor
-  //   MCP GP6     -> Green LED transistor base resistor
-  //   MCP GP7     -> currently unused / spare
+  //   MCP GP0     -> Green status LED transistor base resistor
+  //   MCP GP1     -> RGB LED #1 Red transistor base resistor
+  //   MCP GP2     -> RGB LED #1 Green transistor base resistor
+  //   MCP GP3     -> RGB LED #1 Blue transistor base resistor
+  //   MCP GP4     -> RGB LED #2 Red transistor base resistor
+  //   MCP GP5     -> RGB LED #2 Green transistor base resistor
+  //   MCP GP6     -> RGB LED #2 Blue transistor base resistor
+  //   MCP GP7     -> two rear red LEDs wired in parallel
   TrainLedMCP23008 trainLedExpander;
   bool trainLedExpanderDetected = false;
   const LedRoute led1R = { led1RedExpanderPin };
@@ -641,7 +631,7 @@
   uint8_t consecutiveLowBatterySamples = 0;
   uint8_t consecutiveWarnBatterySamples = 0;
   // Buzzer
-  #define BUZZER_PATTERN_MAX 20
+  #define BUZZER_PATTERN_MAX 26
   uint16_t buzzerPattern[BUZZER_PATTERN_MAX];
   int buzzerIndex = 0;
   unsigned long buzzerTimer = 0;
@@ -668,8 +658,6 @@
   unsigned long tiltEdgeAt = 0;
   unsigned long tiltQuietUntil = 0;
   bool tiltStopLatched = false;
-  bool accelerometerTiltStopLatched = false;
-  bool accelerometerCrashLatched = false;
 
   // ── Tone melody player state ────────────────────────────────────────────────
   const int MELODY_MAX_PAIRS = 64;        // up to 64 (freq,dur) pairs
@@ -688,7 +676,7 @@
   // Shared I2C bus initialization
   // ================================================================================================
   // Called exactly once from setup(), BEFORE any I2C device driver (MCP23008, TCS34725, distance sensor,
-  // MPU6050) touches the bus. Doing this in one place (instead of inside every driver's begin())
+  // or distance-sensor driver) touches the bus. Doing this in one place (instead of inside every driver's begin())
   // guarantees every device sees the same bus speed and timeout settings.
   void initI2cBus() {
     // --- Step 1: bus recovery ("bus clear") ---
@@ -773,12 +761,12 @@
       // The latch was already set inside getBatteryVoltageDirect() - stop setup here.
       return;
     }
-    #if !DISABLE_VOLTAGE_METERING
     if (confirmLowVccAtStartup()) {
-      enterBatteryShutdown(true, ShutdownCause::LowVcc);
-      return;
+      #if ENABLE_VCC_POWER_SHUTDOWN
+        enterBatteryShutdown(true, ShutdownCause::LowVcc);
+        return;
+      #endif
     }
-    #endif
     // F("...") wraps a text string so it stays stored in flash memory (PROGMEM) instead of being
     // copied into precious SRAM at startup. Debug/status text is a great candidate for F() because
     // it's read-only and only needed occasionally, freeing up SRAM for actual program data. This
@@ -799,31 +787,20 @@
     #endif
     #endif
 
-    #if !DISABLE_VOLTAGE_METERING
-    // PRODUCTION-only low-battery protection: these checks are compiled out in a
-    // DISABLE_VOLTAGE_METERING=1 testing build, where a bench 5 V supply would otherwise look like
-    // a deeply discharged pack and lock the train in shutdown at every boot.
-    //
     // Re-sample if the first reading looks bad: a single ADC glitch at boot would otherwise brick
     // startup by latching a permanent shutdown that only a full power cycle can clear (and even a
     // power cycle would re-trigger it if the glitch repeats). We accept the reading only after
-    // BATTERY_LOW_CONFIRMATION_COUNT consecutive confirmations, and never treat an implausibly
-    // low value (< BATTERY_IMPLAUSIBLE_MV on a 2S pack) as real - it's rejected outright.
-    if (batteryVoltage <= BATTERY_LOW_SHUTDOWN_MV) {
-      uint8_t confirmations = (batteryVoltage < BATTERY_IMPLAUSIBLE_MV) ? 0U : 1U;
-      uint16_t lastPlausible = (batteryVoltage < BATTERY_IMPLAUSIBLE_MV) ? 0U : batteryVoltage;
+    // BATTERY_LOW_CONFIRMATION_COUNT consecutive confirmations within the VIN shutdown window.
+    #if ENABLE_VIN_BATTERY_SHUTDOWN
+    if (isVinBatteryShutdownEligible(batteryVoltage)) {
+      uint8_t confirmations = 1U;
+      uint16_t lastPlausible = batteryVoltage;
       for (uint8_t attempt = 1; attempt < (BATTERY_LOW_CONFIRMATION_COUNT + 2U); ++attempt) {
         delay(20);  // let the divider and ADC settle between confirmations
         uint16_t retry = getBatteryVoltageDirect();
         if (criticalOvervoltageLatched) return;
-        if (retry < BATTERY_IMPLAUSIBLE_MV) {
-          DBG_POWER_MANAGEMENT(F("Boot battery retry rejected (implausibly low: "));
-          DBG_POWER_MANAGEMENT(retry);
-          DBGLN_POWER_MANAGEMENT(F(" mV)"));
-          continue;
-        }
         lastPlausible = retry;
-        if (retry <= BATTERY_LOW_SHUTDOWN_MV) {
+        if (isVinBatteryShutdownEligible(retry)) {
           ++confirmations;
           if (confirmations >= BATTERY_LOW_CONFIRMATION_COUNT) break;
         } else {
@@ -912,9 +889,7 @@
     // The periodic VIN guard may sample A0 after its quiet-settle window. Run that sample before
     // the VCC guard temporarily changes the ADC reference to AVCC, so it gets a fully settled
     // internal 1.1V reference rather than a just-restored reference.
-    #if !DISABLE_VOLTAGE_METERING
     updateVccGuard();
-    #endif
 
     updateBatterySignal();
     if (batteryState == BatteryState::Shutdown && !batterySignalActive) {
@@ -952,7 +927,6 @@
     // Debounces the tilt switch so bumps do not cause false alarms. A confirmed tilt stops the
     // train, blocks new drive commands, and provides the user with a clear warning indication.
     updateTiltSensor();
-    updateAccelerometerSafety();
 
     // === 6. IR remote handler ===
     // Reads the newest NEC frame from the remote and maps it to train actions such as speed
@@ -979,12 +953,11 @@
   // ================================================================================================
   // Tilt sensor
   // ================================================================================================
-  // Sensor-wide hardware setup groups tilt pin setup, accelerometer probing, distance-sensor reset,
-  // and color-sensor startup. The individual sensor drivers live in 41-color-sensor.ino,
-  // the selected distance-sensor backend, and 43-accelerometer.ino.
+  // Sensor-wide hardware setup groups tilt pin setup, distance-sensor reset, and color-sensor
+  // startup. The individual sensor drivers live in 41-color-sensor.ino and the selected
+  // distance-sensor backend.
   void initSensorHardware() {
     pinMode(pinTiltSensor, INPUT); // external pull resistor expected
-    initAccelerometerHardware();
     initDistanceSensorHardware();
     initColorSensorHardware();
   }

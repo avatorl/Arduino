@@ -214,13 +214,7 @@
       return;
     }
 
-    if (accelerometerCrashLatched && isMotorControlCommand(code)) {
-      accelerometerCrashLatched = false;
-      sirenActive = false;
-      noTone(pinBuzzer);
-    }
-
-    if ((tiltStopLatched || accelerometerTiltStopLatched) && isMotorControlCommand(code)) {
+    if (tiltStopLatched && isMotorControlCommand(code)) {
       if (!lastWasRepeat) {
         DBGLN_TILT_SENSOR(F("Ignored: tilt lockout active"));
         // Denial cue: bypass the battery-restriction sound gate so the user still hears it.
@@ -441,18 +435,14 @@
         break;
 
       case button9:
-        {  // Beep battery level in 10% steps
+        {  // Beep battery voltage in volts and tenths
           DBGLN_POWER_MANAGEMENT(F("Battery measurement: button 9 status request"));
           uint16_t vIn = getBatteryVoltageSettledForStatus();
           if (criticalOvervoltageLatched) return;
-          int batteryPercent = get2SBatteryPercent(vIn);
           DBG_POWER_MANAGEMENT(F("Battery Voltage: "));
           printVoltageMv(vIn);
           DBGLN_POWER_MANAGEMENT();
-          DBG_POWER_MANAGEMENT(F("Battery level: "));
-          DBG_POWER_MANAGEMENT(batteryPercent);
-          DBGLN_POWER_MANAGEMENT(F("%"));
-          playVoltagePattern(batteryPercent);
+          playVoltagePattern(vIn);
           break;
         }
 

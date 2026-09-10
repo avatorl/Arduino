@@ -470,7 +470,7 @@
   // correct even when millis() wraps after about 49 days. Repeated requests never restart it.
   void requestMotorDrive(Dir dir, int speed) {
     if (criticalOvervoltageLatched || motorFaultLatched
-        || batteryState == BatteryState::Shutdown || tiltStopLatched || accelerometerTiltStopLatched) {
+        || batteryState == BatteryState::Shutdown || tiltStopLatched) {
       DBGLN_MOTOR(F("Drive request blocked by safety latch"));
       Stop();
       return;

@@ -18,6 +18,26 @@
       trainLedExpander.digitalWrite(routes[i].expanderPin, LOW);
     }
 
+    // Confirm the expander and every light channel at boot. GP7 drives the two rear
+    // red LEDs and remains asserted after the RGB and green channels turn off.
+    trainLedExpander.digitalWrite(led1R.expanderPin, HIGH);
+    trainLedExpander.digitalWrite(led1G.expanderPin, HIGH);
+    trainLedExpander.digitalWrite(led1B.expanderPin, HIGH);
+    trainLedExpander.digitalWrite(led2R.expanderPin, HIGH);
+    trainLedExpander.digitalWrite(led2G.expanderPin, HIGH);
+    trainLedExpander.digitalWrite(led2B.expanderPin, HIGH);
+    trainLedExpander.digitalWrite(ledGreen.expanderPin, HIGH);
+    trainLedExpander.digitalWrite(ledRearRed.expanderPin, HIGH);
+    delay(1000);
+
+    trainLedExpander.digitalWrite(led1R.expanderPin, LOW);
+    trainLedExpander.digitalWrite(led1G.expanderPin, LOW);
+    trainLedExpander.digitalWrite(led1B.expanderPin, LOW);
+    trainLedExpander.digitalWrite(led2R.expanderPin, LOW);
+    trainLedExpander.digitalWrite(led2G.expanderPin, LOW);
+    trainLedExpander.digitalWrite(led2B.expanderPin, LOW);
+    trainLedExpander.digitalWrite(ledGreen.expanderPin, LOW);
+
     DBGLN_LEDS(F("MCP23008 ready for train LEDs"));
   }
 
@@ -123,12 +143,13 @@
   }
 
   // ------------------------------------------------------------------------------------------------
-  // Initiate battery percentage sound pattern. Then updateBuzzer plays the pattern.
-  //    - 10%..100% -> 1..10 long beeps with clearly separated intervals
-  //    - 0% -> one long beep
+  // Initiate battery-voltage sound pattern. Then updateBuzzer plays the pattern.
+  //    - Whole volts -> long beeps with clearly separated intervals
+  //    - One-second pause
+  //    - Tenths of a volt -> short beeps with clearly separated intervals
   // ------------------------------------------------------------------------------------------------
   // Speak battery voltage with long/short beeps.
-  void playVoltagePattern(int batteryPercent) {
+  void playVoltagePattern(uint16_t batteryVoltageMv) {
     if (!areUserSoundsAllowed() || SoundOnOff != 1) return;
     if (batterySignalActive || sirenActive) return;
     stopMelody();
@@ -136,21 +157,20 @@
     digitalWrite(pinBuzzer, LOW);
     clearBuzzerPattern();
 
-    int beepCount = constrain(batteryPercent / 10, 0, 10);
+    const uint16_t roundedTenths = (batteryVoltageMv + 50U) / 100U;
+    const uint8_t wholeVolts = roundedTenths / 10U;
+    const uint8_t tenths = roundedTenths % 10U;
     int cap = BUZZER_PATTERN_MAX - 1;
     int idx = 0;
 
-    if (beepCount == 0) {
-      buzzerPattern[idx++] = 300;
-      buzzerPattern[idx] = 0;
-      buzzerTimer = millis();
-      tone(pinBuzzer, buzzerPatternToneHz);
-      return;
+    for (uint8_t i = 0; i < wholeVolts && idx < cap; ++i) {
+      if (idx < cap) buzzerPattern[idx++] = 300;
+      if (idx < cap) buzzerPattern[idx++] = (i < wholeVolts - 1) ? 300 : 1000;
     }
 
-    for (int i = 0; i < beepCount && idx < cap; ++i) {
-      if (idx < cap) buzzerPattern[idx++] = 300;
-      if (i < beepCount - 1 && idx < cap) buzzerPattern[idx++] = 300;
+    for (uint8_t i = 0; i < tenths && idx < cap; ++i) {
+      if (idx < cap) buzzerPattern[idx++] = 150;
+      if (i < tenths - 1 && idx < cap) buzzerPattern[idx++] = 300;
     }
 
     buzzerPattern[idx] = 0;
@@ -354,7 +374,6 @@
     digitalWrite(pinMotorSleep, LOW);
     digitalWrite(pinDistanceSensorXSHUT, LOW);
     distanceTofDetected = false;
-    sleepAccelerometer();  // Park the MPU-6050 in its ~5 uA sleep mode; nothing will read it again.
     powerDownColorSensorCore();
     digitalWrite(pinColorSensorLED, colorSensorLEDOffLevel);
     // After a critical overvoltage the rear red indicator intentionally stays ON during the final

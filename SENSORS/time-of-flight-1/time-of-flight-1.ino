@@ -31,8 +31,8 @@ static const VL53L1X::DistanceMode DISTANCE_MODE = VL53L1X::Short;
 
 // Timing budget (us) and inter-measurement period (ms).
 // Short mode minimum timing budget is 20 ms.
-static const uint32_t TIMING_BUDGET_US    = 50000;
-static const uint32_t INTERMEASUREMENT_MS = 50;
+static const uint32_t TIMING_BUDGET_US    = 20000;
+static const uint32_t INTERMEASUREMENT_MS = 20;
 
 void setup()
 {
@@ -71,7 +71,7 @@ void setup()
 
 void loop()
 {
-  uint16_t mm = sensor.read();
+  uint16_t mm = sensor.read() + 40;
 
   Serial.print(mm);
   Serial.print(F(" mm"));
