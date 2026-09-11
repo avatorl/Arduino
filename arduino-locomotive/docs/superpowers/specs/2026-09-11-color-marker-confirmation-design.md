@@ -21,6 +21,25 @@ empty `//`) remain unchanged because they distinguish calibration samples.
 `colorMarkerFeedbackDurationMs` controls how long the confirmed marker color is
 shown without affecting sensor sampling.
 
+Move the existing `RgbColor` enum into `config.h` so color configuration can
+use readable named values. Add a flash-resident `markerFeedbackColors[]` table
+indexed by `TrackMarkerClass`, including an `RgbColor::Off` entry for
+`MarkerUnknown`. Keep the current same-color defaults:
+
+| Marker | Feedback LED color |
+| --- | --- |
+| Unknown | Off |
+| White | White |
+| Blue | Blue |
+| Green | Green |
+| Magenta | Magenta |
+| Yellow | Yellow |
+| Red | Red |
+
+`41-color-sensor.ino` reads the configured value with `pgm_read_byte()` when a
+marker is confirmed. Remove the hard-coded marker-to-LED-color switch. Marker
+actions remain separate from this visual mapping.
+
 Do not change any clear-channel thresholds or classification behavior related
 to brightness or saturation. Preserve `colorPresenceClearThreshold`,
 `colorSaturationClearThreshold`, every cluster's `minClearThreshold`, and all
