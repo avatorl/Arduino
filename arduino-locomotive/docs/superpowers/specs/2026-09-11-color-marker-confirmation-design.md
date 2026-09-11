@@ -44,9 +44,10 @@ When no marker is confirmed:
 
 When a marker is confirmed:
 
-1. Further readings of that marker do nothing.
-2. Readings of another known color do not execute another action and reset the
+1. Further readings of that marker do not execute another action and reset any
    pending leave sequence.
+2. Readings of another known color also do not execute another action and reset
+   the pending leave sequence.
 3. Unknown readings start or continue the leave sequence.
 4. A leave sequence older than 100 ms restarts at the current sample.
 5. Two unknown readings within 100 ms confirm that the marker was left, clear
@@ -95,7 +96,8 @@ Add native regression coverage for these sequences:
 - conflicting known colors restart confirmation;
 - one unknown sample does not rearm;
 - two unknown samples within 100 ms rearm;
-- known noise during leave confirmation resets the leave sequence;
+- `unknown -> confirmed marker -> unknown` does not rearm;
+- any known color during leave confirmation resets the leave sequence;
 - a confirmed marker cannot retrigger without confirmed leave;
 - marker blink state does not suppress classification;
 - disabling during a blink clears the blink and detection state.
