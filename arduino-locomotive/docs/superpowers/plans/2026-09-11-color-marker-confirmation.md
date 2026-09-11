@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make color-marker actions require two consecutive matching readings, require two consecutive unknown readings before rearming, allow direct confirmed transitions between colors, and keep sensing active during visual feedback.
+**Goal:** Make color-marker actions require confirmed readings, keep sensing active during configurable visual feedback, and configure each marker's feedback LED color in `config.h`.
 
-**Architecture:** Replace the current one-sample transition check with a small state machine owned by `41-color-sensor.ino`. Marker feedback timing remains independent from detection, and disabling the sensor explicitly clears both feedback and detection state. The active implementation continues using `Adafruit_TCS34725`; obsolete active-project references to a hand-written color driver are removed.
+**Architecture:** The confirmation state machine remains owned by `41-color-sensor.ino`. Marker feedback duration and marker-to-LED-color mapping move into typed configuration in `config.h`; the sensor tab reads the flash-resident mapping instead of hard-coding a switch. The active implementation continues using `Adafruit_TCS34725`.
 
 **Tech Stack:** Arduino C++, Adafruit TCS34725, AVR `PROGMEM`, Arduino CLI, existing native PowerShell test runner
 
@@ -13,8 +13,8 @@
 ## File Structure
 
 - Modify `arduino-locomotive/config.h`: add confirmation parameters, comment out the unused custom-driver address constant, preserve all clear/saturation threshold behavior, and improve relevant comments.
-- Modify `arduino-locomotive/41-color-sensor.ino`: implement confirmation/rearm state, decouple marker feedback from sampling, clear state when disabled, remove unreachable/dead color code, and correct library behavior comments.
-- Modify `arduino-locomotive/arduino-locomotive.ino`: simplify the white-balanced sample structure and update relevant shared-state comments if required.
+- Modify `arduino-locomotive/41-color-sensor.ino`: use the configured feedback duration and marker-color table instead of hard-coded values.
+- Modify `arduino-locomotive/arduino-locomotive.ino`: remove the duplicate `RgbColor` definition after moving the type into `config.h`.
 - Modify `arduino-locomotive/.github/copilot-instructions.md`: state that the color sensor uses Adafruit TCS34725 while distance sensors remain register-level.
 - Modify `arduino-locomotive/docs-internal/LEARN.md`: replace stale hand-written color-driver, file-name, and color-sensor pin descriptions.
 - Modify `arduino-locomotive/docs-internal/TECHNICAL.md`: describe the color tab as Adafruit-library integration rather than a custom driver.
@@ -39,13 +39,42 @@ Add these constants beside `colorSensorReadEveryMs`:
 ```cpp
 constexpr uint8_t colorMarkerConfirmationSamples = 2;
 constexpr uint8_t colorMarkerLeaveSamples = 2;
+constexpr unsigned long colorMarkerFeedbackDurationMs = 1000UL;
 ```
 
 Explain that the first constant controls both initial and different-color
 confirmation, while the second controls confirmed marker leave detection.
 Both operate on consecutive samples without a time window.
 
-- [ ] **Step 3: Improve calibration comments without changing sample labels**
+- [ ] **Step 3: Move the shared RGB color type into configuration**
+
+Move the existing `enum class RgbColor : uint8_t` definition from
+`arduino-locomotive.ino` into the color-sensor configuration section before
+the marker feedback table. Preserve all existing enum values and ordering.
+
+- [ ] **Step 4: Add the configurable marker feedback table**
+
+Add:
+
+```cpp
+const RgbColor markerFeedbackColors[] PROGMEM = {
+  RgbColor::Off,      // MarkerUnknown
+  RgbColor::White,    // MarkerWhite
+  RgbColor::Blue,     // MarkerBlue
+  RgbColor::Green,    // MarkerGreen
+  RgbColor::Magenta,  // MarkerMagenta
+  RgbColor::Yellow,   // MarkerYellow
+  RgbColor::Red       // MarkerRed
+};
+constexpr uint8_t markerFeedbackColorCount =
+  sizeof(markerFeedbackColors) / sizeof(markerFeedbackColors[0]);
+```
+
+Add a compile-time assertion that `markerFeedbackColorCount` equals the number
+of marker enum values so adding a future marker cannot silently index beyond
+the table.
+
+- [ ] **Step 5: Improve calibration comments without changing sample labels**
 
 Explain the 24 ms integration/4x gain setting, normalized RGB values, the
 existing presence/saturation checks, the per-cluster clear threshold, and that
@@ -53,7 +82,7 @@ normalized components may total approximately 1000 because of rounding.
 Preserve every existing
 `// printed`, `// original`, and empty `//` marker-table comment exactly.
 
-- [ ] **Step 4: Review the scoped configuration diff**
+- [ ] **Step 6: Review the scoped configuration diff**
 
 Run `git --no-pager diff -- arduino-locomotive\config.h` and distinguish the
 new confirmation edits from the user's existing uncommitted calibration work.
@@ -154,7 +183,58 @@ Run `git --no-pager diff -- arduino-locomotive\41-color-sensor.ino arduino-locom
 Do not stage or commit these files because they already contain the user's
 uncommitted work.
 
-### Task 3: Decouple Blink Lifetime From Sensor Sampling
+### Task 3: Use Configurable Marker Feedback
+
+**Files:**
+- Modify: `arduino-locomotive/41-color-sensor.ino:267-292`
+- Modify: `arduino-locomotive/arduino-locomotive.ino:208-223`
+
+- [ ] **Step 1: Remove the duplicate RGB enum**
+
+Delete the `RgbColor` definition from `arduino-locomotive.ino`; `config.h` is
+included first and now owns the shared type.
+
+- [ ] **Step 2: Read the configured marker color**
+
+Replace the hard-coded marker-class switch in
+`showMarkerFeedbackAndRunAction()` with:
+
+```cpp
+RgbColor markerColor = (RgbColor)pgm_read_byte(
+  &markerFeedbackColors[markerClass]
+);
+```
+
+The state machine calls this helper only for confirmed known marker values, but
+retain the `RgbColor::Off` check so configuration can intentionally suppress a
+marker's visual feedback without disabling its action.
+
+- [ ] **Step 3: Use the configured duration**
+
+Replace:
+
+```cpp
+markerColorBlinkEndsAt = millis() + 1000UL;
+```
+
+with:
+
+```cpp
+markerColorBlinkEndsAt = millis() + colorMarkerFeedbackDurationMs;
+```
+
+- [ ] **Step 4: Update beginner comments**
+
+Explain that `markerFeedbackColors` chooses visual feedback independently from
+the marker action, and `colorMarkerFeedbackDurationMs` controls its duration
+without pausing sensor sampling.
+
+- [ ] **Step 5: Review the scoped feedback diff**
+
+Confirm the switch and hard-coded duration are gone, the mapping remains in
+`PROGMEM`, and no threshold or action behavior changed.
+
+### Task 4: Decouple Blink Lifetime From Sensor Sampling
 
 **Files:**
 - Modify: `arduino-locomotive/41-color-sensor.ino:44-91`
@@ -208,7 +288,7 @@ Do not add native color-specific tests.
 Confirm that the blink fix changes only marker-feedback timing and detection
 state. Do not stage or commit the dirty source file.
 
-### Task 4: Correct Color Sensor Documentation
+### Task 5: Correct Color Sensor Documentation
 
 **Files:**
 - Modify: `arduino-locomotive/.github/copilot-instructions.md:50-80`
@@ -239,7 +319,7 @@ Inspect the documentation diff for accurate Adafruit-library, A2 wiring, and
 confirmation descriptions. Do not stage or commit project files unless the
 user separately requests a commit.
 
-### Task 5: Validate the Complete Firmware
+### Task 6: Validate the Complete Firmware
 
 **Files:**
 - Verify: `arduino-locomotive/config.h`
