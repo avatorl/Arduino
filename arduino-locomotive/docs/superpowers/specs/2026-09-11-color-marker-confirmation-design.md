@@ -19,14 +19,16 @@ Both entry and leave confirmation use the same short time window. The existing
 sample-origin comments (`// printed`, `// original`, and empty `//`) remain
 unchanged because they distinguish calibration samples.
 
-Remove `colorSaturationClearThreshold` and its classification check. Marker
-presence remains controlled by each cluster's `minClearThreshold`, falling
-back to `colorPresenceClearThreshold` when the cluster value is zero.
+Do not change any clear-channel thresholds or classification behavior related
+to brightness or saturation. Preserve `colorPresenceClearThreshold`,
+`colorSaturationClearThreshold`, every cluster's `minClearThreshold`, and all
+existing fallback and saturation checks.
 
 Retain the active `Adafruit_TCS34725` implementation. Do not restore or create
 a hand-written TCS34725 driver. Remove obsolete custom-driver remnants from
-active project files when they are proven unused, including the unused
-`tcs34725Address` configuration constant. Ignore the `backup/` directory.
+active project files when they are proven unused. Keep `tcs34725Address` as a
+commented-out reference with an explanation that the active Adafruit library
+uses the sensor's fixed default `0x29` address. Ignore the `backup/` directory.
 
 ## Detection State Machine
 
@@ -85,7 +87,8 @@ Update relevant beginner-facing comments to:
 - explain candidate confirmation and marker-left rearming;
 - explain why visual feedback must not pause sensing;
 - explain the meaning and units of each new configuration constant;
-- remove saturation-threshold documentation;
+- accurately explain the existing clear and saturation thresholds without
+  changing their values or behavior;
 - correct active project documentation that still claims the color sensor uses
   a hand-written driver;
 - preserve calibration sample-origin comments exactly as requested.
