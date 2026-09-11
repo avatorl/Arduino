@@ -207,7 +207,7 @@ state. Do not stage or commit the dirty source file.
 
 **Files:**
 - Modify: `arduino-locomotive/.github/copilot-instructions.md:50-80`
-- Modify: `arduino-locomotive/docs-internal/LEARN.md:1-175`
+- Modify: `arduino-locomotive/docs-internal/LEARN.md:1-230`
 - Modify: `arduino-locomotive/docs-internal/TECHNICAL.md:1-60`
 
 - [ ] **Step 1: Correct project implementation guidance**
