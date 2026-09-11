@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make color-marker actions require two timely matching readings, require two timely unknown readings before rearming, and keep sensing active during visual feedback.
+**Goal:** Make color-marker actions require two consecutive matching readings, require two consecutive unknown readings before rearming, allow direct confirmed transitions between colors, and keep sensing active during visual feedback.
 
 **Architecture:** Replace the current one-sample transition check with a small state machine owned by `41-color-sensor.ino`. Marker feedback timing remains independent from detection, and disabling the sensor explicitly clears both feedback and detection state. The active implementation continues using `Adafruit_TCS34725`; obsolete active-project references to a hand-written color driver are removed.
 
@@ -39,11 +39,11 @@ Add these constants beside `colorSensorReadEveryMs`:
 ```cpp
 constexpr uint8_t colorMarkerConfirmationSamples = 2;
 constexpr uint8_t colorMarkerLeaveSamples = 2;
-constexpr unsigned long colorMarkerConfirmationWindowMs = 100UL;
 ```
 
-Explain that the first count confirms entry, the second confirms absence, and
-both sequences must complete inside the shared millisecond window.
+Explain that the first constant controls both initial and different-color
+confirmation, while the second controls confirmed marker leave detection.
+Both operate on consecutive samples without a time window.
 
 - [ ] **Step 3: Improve calibration comments without changing sample labels**
 
@@ -74,9 +74,7 @@ Replace `lastTrackMarkerClass` with:
 uint8_t confirmedTrackMarkerClass = MarkerUnknown;
 uint8_t candidateTrackMarkerClass = MarkerUnknown;
 uint8_t candidateTrackMarkerSamples = 0;
-unsigned long candidateTrackMarkerStartedAt = 0;
 uint8_t markerLeaveSamples = 0;
-unsigned long markerLeaveStartedAt = 0;
 ```
 
 Add small reset helpers for pending entry, pending leave, and all detection
@@ -85,7 +83,7 @@ separate.
 
 - [ ] **Step 2: Add the sample-processing state machine**
 
-Add a helper that accepts the classified sample and its timestamp.
+Add a helper that accepts the classified sample.
 
 When no marker is confirmed:
 
@@ -96,11 +94,9 @@ if (markerClass == MarkerUnknown) {
 }
 
 if (candidateTrackMarkerClass != markerClass
-    || candidateTrackMarkerSamples == 0
-    || now - candidateTrackMarkerStartedAt > colorMarkerConfirmationWindowMs) {
+    || candidateTrackMarkerSamples == 0) {
   candidateTrackMarkerClass = markerClass;
   candidateTrackMarkerSamples = 1;
-  candidateTrackMarkerStartedAt = now;
   return;
 }
 
@@ -108,15 +104,20 @@ if (candidateTrackMarkerClass != markerClass
 if (candidateTrackMarkerSamples >= colorMarkerConfirmationSamples) {
   confirmedTrackMarkerClass = markerClass;
   resetMarkerCandidate();
-  showMarkerFeedbackAndRunAction(markerClass, now);
+  showMarkerFeedbackAndRunAction(markerClass);
 }
 ```
 
-When a marker is already confirmed, every known reading resets pending leave
-confirmation without executing another action. Unknown readings must be
-consecutive and complete within `colorMarkerConfirmationWindowMs`; once
-`colorMarkerLeaveSamples` is reached, clear the confirmed marker and reset the
-leave state.
+When a marker is already confirmed, the same known reading resets pending leave
+and different-color confirmation. Unknown readings must be consecutive; once
+`colorMarkerLeaveSamples` is reached, clear the confirmed marker. A different
+known color resets the leave count and starts or continues candidate
+confirmation; once `colorMarkerConfirmationSamples` is reached, directly
+replace the confirmed marker and run the new action.
+
+When `momentaryActive` pauses color reads, clear pending candidate and leave
+counts before returning. Keep `confirmedTrackMarkerClass` unchanged so a
+half-complete sequence cannot span the jog pause.
 
 - [ ] **Step 3: Extract confirmed-marker feedback**
 
@@ -188,11 +189,15 @@ session begins from fresh samples.
 
 Trace the implementation for:
 
-- two matching samples inside 100 ms confirm once;
+- two consecutive matching samples confirm once;
 - a conflicting color restarts entry confirmation;
-- an expired entry window restarts at count one;
-- two unknown samples inside 100 ms rearm;
+- two consecutive unknown samples rearm;
 - `unknown -> confirmed marker -> unknown` does not rearm;
+- two consecutive readings of a different known color directly confirm it;
+- a single different-color reading followed by the confirmed color does not
+  transition;
+- a momentary-jog pause clears partial counts but preserves the confirmed
+  marker;
 - a blink does not stop entry or leave confirmation;
 - disabling during a blink clears the blink and restores normal lights.
 

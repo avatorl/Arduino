@@ -13,11 +13,10 @@ Add beginner-readable color-sensor constants in `config.h`:
 
 - `colorMarkerConfirmationSamples = 2`
 - `colorMarkerLeaveSamples = 2`
-- `colorMarkerConfirmationWindowMs = 100`
 
-Both entry and leave confirmation use the same short time window. The existing
-sample-origin comments (`// printed`, `// original`, and empty `//`) remain
-unchanged because they distinguish calibration samples.
+Confirmation is based only on consecutive samples, with no elapsed-time
+window. The existing sample-origin comments (`// printed`, `// original`, and
+empty `//`) remain unchanged because they distinguish calibration samples.
 
 Do not change any clear-channel thresholds or classification behavior related
 to brightness or saturation. Preserve `colorPresenceClearThreshold`,
@@ -37,31 +36,37 @@ Keep separate state for:
 - the currently confirmed marker;
 - the current candidate marker;
 - the number of consecutive candidate samples;
-- the time at which the candidate sequence began;
-- the number and start time of consecutive unknown samples.
+- the number of consecutive unknown samples.
 
 When no marker is confirmed:
 
 1. An unknown reading clears the pending candidate.
 2. A known color starts or continues a candidate sequence.
 3. A different known color replaces the candidate and restarts its count.
-4. A sequence older than 100 ms restarts at the current sample.
-5. Two matching samples within 100 ms confirm the marker and run its visual
+4. Two consecutive matching samples confirm the marker and run its visual
    feedback and action exactly once.
 
 When a marker is confirmed:
 
-1. Further readings of that marker do not execute another action and reset any
-   pending leave sequence.
-2. Readings of another known color also do not execute another action and reset
-   the pending leave sequence.
-3. Unknown readings start or continue the leave sequence.
-4. A leave sequence older than 100 ms restarts at the current sample.
-5. Two unknown readings within 100 ms confirm that the marker was left, clear
+1. Further readings of that marker do not execute another action and reset
+   pending leave and different-color confirmation.
+2. Unknown readings start or continue the leave sequence and clear a pending
+   different-color candidate.
+3. Two consecutive unknown readings confirm that the marker was left, clear
    the confirmed marker, and permit a future marker confirmation.
+4. A different known color resets the leave count and starts or continues a
+   different-color candidate.
+5. Two consecutive readings of the same different known color directly replace
+   the confirmed marker and run the new marker's action without requiring an
+   intervening unknown reading.
 
-Requiring confirmed absence prevents `marker -> unknown -> marker` noise from
-retriggering an action while the train remains over the same marker.
+Requiring two consecutive samples prevents isolated color or unknown readings
+from changing the confirmed state.
+
+If color sampling is paused for a momentary jog, clear only the pending entry,
+leave, and different-color counts. Keep the already confirmed marker latched,
+but do not combine a pre-jog sample with a post-jog sample as one consecutive
+sequence.
 
 ## Sampling and Visual Feedback
 
@@ -103,13 +108,16 @@ Do not add native color-sensor tests as part of this change. Review the state
 transitions directly against these required sequences while implementing:
 
 - one known sample does not trigger;
-- two matching known samples within 100 ms trigger once;
-- samples outside the window restart confirmation;
+- two consecutive matching known samples trigger once;
 - conflicting known colors restart confirmation;
 - one unknown sample does not rearm;
-- two unknown samples within 100 ms rearm;
+- two consecutive unknown samples rearm;
 - `unknown -> confirmed marker -> unknown` does not rearm;
-- any known color during leave confirmation resets the leave sequence;
+- two consecutive readings of a different known color directly confirm and run
+  the new marker;
+- the confirmed color during leave confirmation resets the leave sequence;
+- a jog pause clears partial confirmation counts without clearing the confirmed
+  marker;
 - a confirmed marker cannot retrigger without confirmed leave;
 - readings taken during an active marker blink advance confirmation state and
   may trigger the next eligible action;
