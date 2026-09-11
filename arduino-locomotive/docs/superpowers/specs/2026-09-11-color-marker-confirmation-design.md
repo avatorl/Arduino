@@ -23,6 +23,11 @@ Remove `colorSaturationClearThreshold` and its classification check. Marker
 presence remains controlled by each cluster's `minClearThreshold`, falling
 back to `colorPresenceClearThreshold` when the cluster value is zero.
 
+Retain the active `Adafruit_TCS34725` implementation. Do not restore or create
+a hand-written TCS34725 driver. Remove obsolete custom-driver remnants from
+active project files when they are proven unused, including the unused
+`tcs34725Address` configuration constant. Ignore the `backup/` directory.
+
 ## Detection State Machine
 
 Keep separate state for:
@@ -74,12 +79,15 @@ so comments must describe the updater as periodic rather than non-blocking.
 
 Update relevant beginner-facing comments to:
 
+- state that the active sensor driver is the Adafruit TCS34725 library;
 - describe the actual 24 ms integration time;
 - avoid claiming RGBC is read in one I2C burst;
 - explain candidate confirmation and marker-left rearming;
 - explain why visual feedback must not pause sensing;
 - explain the meaning and units of each new configuration constant;
 - remove saturation-threshold documentation;
+- correct active project documentation that still claims the color sensor uses
+  a hand-written driver;
 - preserve calibration sample-origin comments exactly as requested.
 
 Remove the unreachable duplicate `break` in the red-marker action. Remove
@@ -88,7 +96,8 @@ unrelated work already present in the dirty worktree.
 
 ## Verification
 
-Add native regression coverage for these sequences:
+Do not add native color-sensor tests as part of this change. Review the state
+transitions directly against these required sequences while implementing:
 
 - one known sample does not trigger;
 - two matching known samples within 100 ms trigger once;
@@ -99,8 +108,9 @@ Add native regression coverage for these sequences:
 - `unknown -> confirmed marker -> unknown` does not rearm;
 - any known color during leave confirmation resets the leave sequence;
 - a confirmed marker cannot retrigger without confirmed leave;
-- marker blink state does not suppress classification;
+- readings taken during an active marker blink advance confirmation state and
+  may trigger the next eligible action;
 - disabling during a blink clears the blink and detection state.
 
 Compile the complete Nano sketch with warnings and run the existing native
-test suite.
+suite without adding new color-specific cases.
