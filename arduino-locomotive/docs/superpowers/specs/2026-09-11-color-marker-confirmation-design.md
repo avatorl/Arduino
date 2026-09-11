@@ -24,7 +24,9 @@ shown without affecting sensor sampling.
 Move the existing `RgbColor` enum into `config.h` so color configuration can
 use readable named values. Add a flash-resident `markerFeedbackColors[]` table
 indexed by `TrackMarkerClass`, including an `RgbColor::Off` entry for
-`MarkerUnknown`. Keep the current same-color defaults:
+`MarkerUnknown`. Add `MarkerClassCount` as the final non-marker enum value and
+use it in a compile-time assertion that the table has one entry per marker
+class. Keep the current same-color defaults:
 
 | Marker | Feedback LED color |
 | --- | --- |

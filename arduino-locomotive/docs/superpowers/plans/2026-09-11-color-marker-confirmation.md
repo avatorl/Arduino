@@ -68,11 +68,13 @@ const RgbColor markerFeedbackColors[] PROGMEM = {
 };
 constexpr uint8_t markerFeedbackColorCount =
   sizeof(markerFeedbackColors) / sizeof(markerFeedbackColors[0]);
+static_assert(markerFeedbackColorCount == MarkerClassCount,
+              "markerFeedbackColors must contain one entry per marker class.");
 ```
 
-Add a compile-time assertion that `markerFeedbackColorCount` equals the number
-of marker enum values so adding a future marker cannot silently index beyond
-the table.
+Add `MarkerClassCount` after `MarkerRed` in `TrackMarkerClass`. It is a count
+sentinel, not a detectable marker. The assertion prevents a future marker from
+silently indexing beyond the table.
 
 - [ ] **Step 5: Improve calibration comments without changing sample labels**
 
@@ -175,7 +177,9 @@ Document that:
 - the periodic updater is cooperative except for that library delay and must
   not be described as non-blocking;
 - confirmation prevents isolated readings from executing actions;
-- confirmed absence is required before another marker action can run.
+- confirmed absence is required before the same marker can run again, while
+  two consecutive samples of a different known color may directly run the new
+  marker action.
 
 - [ ] **Step 7: Review the scoped detection diff**
 
