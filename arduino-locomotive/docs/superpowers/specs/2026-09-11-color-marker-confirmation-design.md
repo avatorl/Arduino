@@ -13,10 +13,13 @@ Add beginner-readable color-sensor constants in `config.h`:
 
 - `colorMarkerConfirmationSamples = 2`
 - `colorMarkerLeaveSamples = 2`
+- `colorMarkerFeedbackDurationMs = 1000UL`
 
 Confirmation is based only on consecutive samples, with no elapsed-time
 window. The existing sample-origin comments (`// printed`, `// original`, and
 empty `//`) remain unchanged because they distinguish calibration samples.
+`colorMarkerFeedbackDurationMs` controls how long the confirmed marker color is
+shown without affecting sensor sampling.
 
 Do not change any clear-channel thresholds or classification behavior related
 to brightness or saturation. Preserve `colorPresenceClearThreshold`,
