@@ -404,7 +404,7 @@
       // A saturated ADC (raw 1023 = the meter's ~12.2 V full scale) is ambiguous: it can mean the
       // voltage divider is disconnected/broken OR the input truly exceeds what the meter can
       // measure. Both are reported because the software cannot tell them apart.
-      DBG_POWER_MANAGEMENT(F("CRITICAL: Voltage meter saturated (ADC="));
+      DBG_POWER_MANAGEMENT(F("\033[0;31;49mCRITICAL: Voltage meter saturated\033[0m (ADC="));
       DBG_POWER_MANAGEMENT(averageRaw);
       DBG_POWER_MANAGEMENT(F(", reads as "));
       DBG_POWER_MANAGEMENT(voltageMv);
@@ -413,7 +413,7 @@
     } else {
       // In-scale but above the 8.5 V limit: a genuine measured overvoltage (a healthy 2S pack
       // never exceeds 8.4 V). The measured value is logged for diagnosis.
-      DBG_POWER_MANAGEMENT(F("CRITICAL: Overvoltage detected: "));
+      DBG_POWER_MANAGEMENT(F("\033[0;31;49mCRITICAL: Overvoltage detected\033[0m: "));
       DBG_POWER_MANAGEMENT(voltageMv);
       DBG_POWER_MANAGEMENT(F(" mV (>8.5V limit); "));
       DBGLN_POWER_MANAGEMENT(F("power cycle required"));
@@ -424,7 +424,7 @@
   // Enter low-battery warning mode and start its repeating signal.
   void enterBatteryWarning() {
     if (batteryState == BatteryState::Warning) return;
-    DBGLN_POWER_MANAGEMENT(F("Battery WARNING level: entering restricted mode"));
+    DBGLN_POWER_MANAGEMENT(F("\033[0;33;49mBattery WARNING level: entering restricted mode\033[0m"));
     batteryState = BatteryState::Warning;
     applyBatteryRestrictions();
     lastBatteryWarningSignalMs = millis();
@@ -456,9 +456,9 @@
 
     shutdownCause = cause;
     if (cause == ShutdownCause::LowVcc) {
-      DBGLN_POWER_MANAGEMENT(F("VCC SHUTDOWN level: entering lockout"));
+      DBGLN_POWER_MANAGEMENT(F("\033[0;31;49mVCC SHUTDOWN level: entering lockout\033[0m"));
     } else {
-      DBGLN_POWER_MANAGEMENT(F("VIN SHUTDOWN level: entering lockout"));
+      DBGLN_POWER_MANAGEMENT(F("\033[0;31;49mVIN SHUTDOWN level: entering lockout\033[0m"));
     }
     batteryState = BatteryState::Shutdown;
     shutdownSignalPlayedThisBoot = startupLockout;
@@ -539,15 +539,16 @@
       return;
     }
 
+    DBG_POWER_MANAGEMENT(F("VCC low: "));
+    DBG_POWER_MANAGEMENT(vccVoltage);
+    DBG_POWER_MANAGEMENT(F(" mV (sample "));
+    DBG_POWER_MANAGEMENT(consecutiveLowVccSamples);
+    DBG_POWER_MANAGEMENT(F("/"));
+    DBG_POWER_MANAGEMENT(VCC_LOW_CONFIRMATION_COUNT);
+    DBGLN_POWER_MANAGEMENT(F(")"));
+
     if (vccVoltage < VCC_LOW_SHUTDOWN_MV) {
       if (consecutiveLowVccSamples < VCC_LOW_CONFIRMATION_COUNT) ++consecutiveLowVccSamples;
-      DBG_POWER_MANAGEMENT(F("VCC low: "));
-      DBG_POWER_MANAGEMENT(vccVoltage);
-      DBG_POWER_MANAGEMENT(F(" mV (sample "));
-      DBG_POWER_MANAGEMENT(consecutiveLowVccSamples);
-      DBG_POWER_MANAGEMENT(F("/"));
-      DBG_POWER_MANAGEMENT(VCC_LOW_CONFIRMATION_COUNT);
-      DBGLN_POWER_MANAGEMENT(F(")"));
       #if ENABLE_VCC_POWER_SHUTDOWN
         if (consecutiveLowVccSamples >= VCC_LOW_CONFIRMATION_COUNT) {
           enterBatteryShutdown(false, ShutdownCause::LowVcc);

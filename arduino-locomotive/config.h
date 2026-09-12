@@ -7,19 +7,23 @@
 // # USER SETTINGS SHARED BY MULTIPLE MODULES                                 #
 // ############################################################################
 
-// These "#define NAME" lines (with no value) are feature-switch macros: they must be defined
-// *before* <IRremote.hpp> is included (see the #include order in arduino-locomotive.ino) because the
-// IRremote library reads them at compile time to decide which hardware timer to use and which
-// remote-control protocols to build support for. Arduino's Timer1 and Timer2 are internal hardware
-// counters shared by several features (PWM output, tone(), IRremote's timing); telling IRremote to
-// use Timer1 keeps it out of Timer2's way. EXCLUDE_* macros remove unused remote-control protocol
-// decoders to save flash memory, since this train only needs the NEC protocol used by the remote.
-#define IR_USE_AVR_TIMER1 // IRremote uses Timer1 so Timer2 remains free for tone() on the passive buzzer.
-#define DECODE_NEC
-#define EXCLUDE_UNIVERSAL_PROTOCOLS
-#define EXCLUDE_EXOTIC_PROTOCOLS
-#define NO_LED_FEEDBACK_CODE
-#define RAW_BUFFER_LENGTH 100
+// === IR RECEIVER CONFIGURATION ==================================================================
+
+  // These "#define NAME" lines (with no value) are feature-switch macros: they must be defined
+  // *before* <IRremote.hpp> is included (see the #include order in arduino-locomotive.ino) because the
+  // IRremote library reads them at compile time to decide which hardware timer to use and which
+  // remote-control protocols to build support for. Arduino's Timer1 and Timer2 are internal hardware
+  // counters shared by several features (PWM output, tone(), IRremote's timing); telling IRremote to
+  // use Timer1 keeps it out of Timer2's way. EXCLUDE_* macros remove unused remote-control protocol
+  // decoders to save flash memory, since this train only needs the NEC protocol used by the remote.
+  #define IR_USE_AVR_TIMER1 // IRremote uses Timer1 so Timer2 remains free for tone() on the passive buzzer.
+  #define DECODE_NEC
+  #define EXCLUDE_UNIVERSAL_PROTOCOLS
+  #define EXCLUDE_EXOTIC_PROTOCOLS
+  #define NO_LED_FEEDBACK_CODE
+  #define RAW_BUFFER_LENGTH 100
+
+// === EEPROM LOGGING AND SERIAL MONITOR OUTPUT CONFIGURATION =====================================
 
 // EEPROM logging keeps a small boot/event history.
 // Unit: 1 = enabled, 0 = disabled.
@@ -30,7 +34,7 @@
 // via a build tool's extra compiler flags) without needing to edit config.h at all. If nothing
 // else defines it first, this file provides the default value shown here.
 #ifndef ENABLE_EEPROM_LOGGING
-#define ENABLE_EEPROM_LOGGING 1
+#define ENABLE_EEPROM_LOGGING 0
 #endif
 
 // Per-module debug flags. Turn on one or multiple while troubleshooting. Turn off for normal train operation.
@@ -66,6 +70,9 @@
 #ifndef DEBUG_EEPROM
 #define DEBUG_EEPROM 0
 #endif
+
+// === VOLTAGE MONITORING =========================================================================
+
 // Permanent software shutdown policies. VIN shutdown protects a connected, discharged pack.
 // VCC and meter-fault shutdowns stay disabled so USB-powered debugging cannot lock out the train.
 #ifndef ENABLE_VIN_BATTERY_SHUTDOWN
@@ -78,13 +85,15 @@
 #define ENABLE_OVERVOLTAGE_POWER_SHUTDOWN 1
 #endif
 
-// --- I2C Addresses ---
+// === I2C ADDRESSES ==============================================================================
+
 // The I2C bus is shared by multiple devices. Each device has a unique 7-bit address.
 constexpr uint8_t mcp23008Address = 0x20; // (A0, A1, A2 pulled LOW by default)
-constexpr uint8_t tcs34725Address = 0x29; // TCS34725 RGB color sensor = 0x29 (default)
+// constexpr uint8_t tcs34725Address = 0x29; // Reference only: Adafruit_TCS34725 uses the fixed default 0x29 address.
 constexpr uint8_t distanceSensorAddress = 0x2A; // Distance sensor = 0x2A (changed from default 0x29 using XSHUT pin)
 
-// --- Pins a builder may want to rewire ---
+// === ARDUINO PIN MAPPING ========================================================================
+
 // These are the main hardware connections a builder may change before compiling.
 // Keep each pin unique, and never move a function to D9 or D10 if it needs PWM.
 // "constexpr" declares a typed constant that the compiler must be able to compute at compile time
@@ -102,7 +111,7 @@ constexpr int pinDistanceSensorXSHUT = A3;
 // D0 - RX (serial input) shared by USB serial and Bluetooth
 // D1 - TX (serial output) shared by USB serial and Bluetooth
 constexpr int pinIRReceiver = 2;
-// D3 - unused
+// D3 - unused - reserved for accelerometer interrupt (INT)
 // D4 - unused
 constexpr int pinMotor_IN1 = 5; // with PWM
 constexpr int pinMotor_IN2 = 6; // with PWM
@@ -114,7 +123,8 @@ constexpr int pinTiltSensor = 12;
 // D12 - unused
 // D13 - unused (built-in LED)
 
-// --- MCP23008 expander pin mapping ---
+// === MCP23008 EXPANDER PIN MAPPING ==============================================================
+
 // Green LED
 constexpr uint8_t ledGreenExpanderPin = 0;
 // RGB LED 1
@@ -128,7 +138,8 @@ constexpr uint8_t led2BlueExpanderPin = 6;
 // 2 x Red LEDs (on the same pin)
 constexpr uint8_t ledRearRedExpanderPin = 7;
 
-// --- IR remote mapping ---
+// === IR REMOTE MAPPING ==========================================================================
+
 // Button codes for the NEC "Car MP3" handheld remote bundled with this build.
 // Change these only if you swap to a different remote or remap train functions.
 constexpr uint8_t buttonCHminus = 69;   // Speed down
@@ -152,11 +163,13 @@ constexpr uint8_t button6 = 90;         // Play music 6
 constexpr uint8_t button7 = 66;         // Play music 7
 constexpr uint8_t button8 = 82;         // Play music 8
 constexpr uint8_t button9 = 74;         // Battery test
+
 constexpr unsigned long momentaryTimeout = 200UL; // Stop a held jog this long after repeats stop.
 // + and - start at level 1, then reach the normal 6 V maximum while held; only CH+ enables boost.
 constexpr unsigned long MOMENTARY_RAMP_DURATION_MS = 2000UL;
 
-// --- Motor and drive settings ---
+// === MOTOR AND DRIVE SETTINGS ===================================================================
+
 // Manual speed steps are expressed as requested motor voltage, then converted to PWM at runtime
 // using the current battery voltage. The first entry must stay 0 for "stopped".
 constexpr unsigned long DIR_DELAY = 500UL;        // Coast time before reversing direction.
@@ -182,21 +195,51 @@ constexpr int AUTO_DISTANCE_RESTART = 18;            // Start moving again once 
 constexpr int AUTO_DISTANCE_MAX_SPEED = 80;          // Distance at which auto mode may request full normal speed (cm).
 constexpr int AUTO_DISTANCE_MIN_SPEED = 30;          // Distance at which auto mode slows down to the minimal speed (cm).
 
-// --- Sensor settings ---
-// Track-marker classification labels and color-cluster calibration table.
-// Tune markerClusters when testing shows track colors are being misclassified.
+// === COLOR SENSOR SETTINGS ======================================================================
+
+// Defining required data structures --------------------------------------------------------------
+
+// Headlight and status color palette.
+// "enum class" defines a small, named set of allowed values (Off, Red, Green, ...) instead of
+// using plain numbers. Compared to a plain "enum", "enum class" values must always be written as
+// RgbColor::Red (not just Red), which avoids accidentally mixing up unrelated enums that happen to
+// share a value name. ": uint8_t" tells the compiler to store each value in a single byte instead
+// of the default int size, saving a little RAM/flash since there are only 8 colors here.
+enum class RgbColor : uint8_t {
+  Off = 0,
+  Red,
+  Green,
+  Blue,
+  Yellow,
+  Cyan,
+  Magenta,
+  White
+};
+
 enum TrackMarkerClass : uint8_t {
   MarkerUnknown = 0,
   MarkerWhite,
-  MarkerBrown,
-  MarkerCyan,
+  MarkerBlue,
   MarkerGreen,
-  MarkerGrey,
   MarkerMagenta,
-  MarkerOrange,
   MarkerYellow,
-  MarkerRed
+  MarkerRed,
+  MarkerClassCount
 };
+
+// Each marker class selects the temporary headlight color shown when that marker is confirmed.
+// MarkerUnknown maps to Off so unknown readings never produce visual feedback.
+const RgbColor markerFeedbackColors[] PROGMEM = {
+  RgbColor::Off,
+  RgbColor::White,
+  RgbColor::Blue,
+  RgbColor::Green,
+  RgbColor::Magenta,
+  RgbColor::Yellow,
+  RgbColor::Red
+};
+constexpr uint8_t markerFeedbackColorCount =
+  sizeof(markerFeedbackColors) / sizeof(markerFeedbackColors[0]);
 
 struct PrototypeRgb {
   uint16_t r;
@@ -208,36 +251,54 @@ struct MarkerClusterDefinition {
   TrackMarkerClass markerClass;
   PrototypeRgb center;
   uint16_t maxDistance;
+  uint16_t minClearThreshold;
 };
 
-// Color-sensor sampling and calibration.
+// Color sensor calibration -----------------------------------------------------------------------
+
+// The sensor uses 24 ms integration (exposure) and 4x gain. This polling interval is slightly
+// longer so each Adafruit getRawData() call can collect a fresh reading.
 constexpr unsigned long colorSensorReadEveryMs = 30UL; // Time between color-sensor reads.
-constexpr uint16_t colorClearMinThreshold = 160;       // Minimum clear-channel brightness before trusting a read.
-constexpr uint16_t colorMatchClearThreshold = 304;     // Extra brightness gate for track-marker matching.
-constexpr float whiteBalanceRedGain = 1.000f;          // Red-channel calibration multiplier.
-constexpr float whiteBalanceGreenGain = 1.212f;        // Green-channel calibration multiplier.
-constexpr float whiteBalanceBlueGain = 2.318f;         // Blue-channel calibration multiplier.
+// A marker action runs after this many consecutive readings of the same known color.
+constexpr uint8_t colorMarkerConfirmationSamples = 2;
+// The confirmed marker is cleared after this many consecutive unknown readings.
+constexpr uint8_t colorMarkerLeaveSamples = 2;
+// Controls how long confirmed-marker visual feedback stays visible; sensing continues meanwhile.
+constexpr unsigned long colorMarkerFeedbackDurationMs = 1000UL;
+
+// Readings above this unchanged clear-channel limit are rejected as sensor saturation.
+constexpr uint16_t colorSaturationClearThreshold = 60000;
+
+// White balance ----------------------------------------------------------------------------------
+
+// Put the locomotive on a sheet of white paper (high quality white paper, e.g. incjet photo paper)
+// Scan white paper with DEBUG_COLOR_SENSOR = 1 and adjust multipliers to achieve { 333, 333, 333 } as close as possible
+
+constexpr float whiteBalanceRedGain = 1.00f;;          // Red-channel calibration multiplier.
+constexpr float whiteBalanceGreenGain = 1.46f;        // Green-channel calibration multiplier.
+constexpr float whiteBalanceBlueGain = 2.45f;         // Blue-channel calibration multiplier.
+
+// Known colors -----------------------------------------------------------------------------------
+
 // Each entry is a known track-marker color center plus its allowed matching radius.
+// Format: { MarkerColor, { R, G, B }, Radius, minClearThreshold }. RGB is normalized to about
+// 1000 total; integer rounding can make the total differ slightly.
+// A cluster is considered only when the clear channel reaches its own minClearThreshold below.
+// Put the locomorive on a track with an action brick (original or 3D-printed), then
+// Scan color the brick with DEBUG_COLOR_SENSOR = 1 and copy { R, G, B } values from serial monitor
+// Then adjust Radius and minClearThreshold
 const MarkerClusterDefinition markerClusters[] PROGMEM = {
-  { MarkerWhite, { 334, 333, 333 }, 32 },
-  { MarkerBrown, { 392, 322, 287 }, 31 },
-  { MarkerBrown, { 415, 305, 280 }, 22 },
-  { MarkerBrown, { 428, 289, 284 }, 25 },
-  { MarkerCyan, { 158, 313, 529 }, 60 },
-  { MarkerGreen, { 160, 518, 322 }, 62 },
-  { MarkerGreen, { 203, 482, 315 }, 52 },
-  { MarkerGrey, { 303, 345, 352 }, 38 },
-  { MarkerGrey, { 327, 331, 342 }, 22 },
-  { MarkerGrey, { 347, 317, 336 }, 27 },
-  { MarkerMagenta, { 455, 201, 344 }, 14 },
-  { MarkerMagenta, { 476, 193, 331 }, 18 },
-  { MarkerMagenta, { 488, 186, 326 }, 10 },
-  { MarkerOrange, { 542, 254, 204 }, 22 },
-  { MarkerRed, { 623, 161, 216 }, 60 },
-  { MarkerYellow, { 420, 368, 212 }, 14 },
-  { MarkerYellow, { 432, 353, 215 }, 18 },
+  { MarkerWhite, { 315, 364, 321 }, 30, 3000 }, // printed
+  { MarkerBlue, { 180, 273, 547 } , 60, 750 }, // printed
+  { MarkerGreen, { 177, 501, 321 } , 60, 500 }, // original
+  { MarkerGreen, { 197, 515, 288 } , 60, 750 }, // printed
+  { MarkerMagenta, { 455, 201, 344 }, 60, 750 }, // 
+  { MarkerRed,  { 612, 174, 214 }, 60, 750 }, // printed
+  { MarkerYellow, { 424, 373, 203 }, 60, 2000 }, // 
 };
 constexpr uint8_t markerClusterCount = sizeof(markerClusters) / sizeof(markerClusters[0]);
+
+// === DISTANCE SENSOR SETTINGS ===================================================================
 
 // Distance-sensor timing and fault handling.
 constexpr uint16_t distanceTofTimeoutMs = 30;           // Timeout for one measurement attempt.
@@ -256,8 +317,9 @@ constexpr unsigned long tofStartupGraceMs = 1000UL;
 constexpr unsigned long TILT_STABLE_MS = 1000UL;
 constexpr unsigned long TILT_QUIET_MS = 500UL;
 
-// --- Power-management settings ---
-constexpr unsigned long BATTERY_CHECK_INTERVAL_MS = 1000UL;    // Time between parked battery-health checks.
+// === POWER MANAGEMENT SETTINGS ==================================================================
+
+constexpr unsigned long BATTERY_CHECK_INTERVAL_MS = 5000UL;    // Time between parked battery-health checks.
 constexpr unsigned long VCC_CHECK_INTERVAL_MS = 1000UL;          // Check the Nano 5V rail this often during normal operation.
 // After the train idles and enters sleep, it gives a short visual “I’m sleeping but powered” indication every IDLE_SLEEP_HEARTBEAT_MS seconds. The signal is a short IDLE_SLEEP_HEARTBEAT_ON_MS ms red flash at the rear of the locomotive. The front RGB lights and green LED remain off.
 constexpr unsigned long IDLE_SLEEP_HEARTBEAT_MS = 8000UL;      // Sleep heartbeat cycle while idling (use 8-second intervals)
@@ -269,10 +331,11 @@ constexpr unsigned long IDLE_SLEEP_WARNING_LEAD_MS = 15000UL;   // Blink warning
 // --- Battery voltage thresholds ---
 // VCC (5V rail) monitoring and shutdown thresholds.
 constexpr uint16_t VCC_LOW_SHUTDOWN_MV = 4600;                  // Protect the 16MHz Nano and 5V peripherals before VCC reaches 4.5V.
-constexpr uint16_t BATTERY_IMPLAUSIBLE_MV = 5000;               // Below this on a 2S pack = ADC glitch; reject, do not count as low.
-constexpr uint16_t VIN_BATTERY_SHUTDOWN_MAX_MV = 6400;          // Discharged 2S pack upper bound for permanent shutdown.
-constexpr uint16_t BATTERY_LOW_WARNING_MV = 6500;               // Enter warning mode below this pack voltage.
-constexpr uint16_t BATTERY_WARNING_RECOVERY_MV = 6600;          // Exit warning mode once the battery recovers above this.
+// KAmod I2C Mini Out8 module leaks small current from it's V+ line (Arduino +5V rail) to it's VCC line (Arduino VIN) when battery pack is disconnected (power off) but the Arduino is still powered via USB or another source. This can cause false readings on the battery voltage measurement during debugging.
+constexpr uint16_t BATTERY_IMPLAUSIBLE_MV = 5000;               // Below this on a 2S pack = implausible reading (e.g. due to KAmod I2C Mini Out8 leakage); reject, do not count as low.
+constexpr uint16_t VIN_BATTERY_SHUTDOWN_MAX_MV = 6600;          // Discharged 2S pack upper bound for permanent shutdown.
+constexpr uint16_t BATTERY_LOW_WARNING_MV = 6630;               // Enter warning mode below this pack voltage.
+constexpr uint16_t BATTERY_WARNING_RECOVERY_MV = 6700;          // Exit warning mode once the battery recovers above this.
 // A healthy 2S 18650 pack never exceeds 8.4 V (two cells x 4.2 V full charge). Anything measured
 // above 8.5 V therefore means a genuine overvoltage or a broken/disconnected voltage divider, and
 // the sketch latches a critical-overvoltage fault (see enterCriticalOvervoltage() in
@@ -286,9 +349,8 @@ constexpr unsigned long BATTERY_SHUTDOWN_SIGNAL_MS = 10000UL;   // Length of the
 
 constexpr uint8_t BATTERY_LOW_CONFIRMATION_COUNT = 3;           // Consecutive low battery samples required before warning/shutdown.
 constexpr uint8_t VCC_LOW_CONFIRMATION_COUNT = 3;               // Consecutive low VCC samples required before shutdown.
-// Calibrate this to the actual ATmega328P bandgap voltage in microvolts if a multimeter comparison
-// shows a material error. VCC mV = VCC_BANDGAP_CALIBRATION_UV * 1023 / ADC_bandgap_reading / 1000.
 
+// Arduino Nano internal 1.1V bandgap calibration in microvolts.
 constexpr uint32_t VCC_BANDGAP_CALIBRATION_UV = 1100000UL;
 // 100K and 10K resistor divider for battery voltage measurement (99K and 9.9k actual values), scale factor = (100K + 10K) / 10K = 11.
 // 11 * 1.1V max reference voltage * 1.01 calibration factor = 12.221
@@ -296,10 +358,9 @@ constexpr uint16_t BATTERY_MILLIVOLT_SCALE_NUMERATOR = 12221;   // ADC-to-milliv
 constexpr int BATTERY_ADC_MAX = 1023;                           // 10-bit ADC full-scale value on the Nano.
 constexpr uint8_t BATTERY_ADC_SAMPLES = 8;                      // ADC samples averaged per battery measurement.
 
-// --- Lights and sound settings ---
+// === LIGHTS AND SOUNDS SETTINGS =================================================================
+
 constexpr int FrontLightOnOff = 1;                  // Master enable for the front RGB headlights.
-constexpr uint8_t colorSensorLEDOnLevel = HIGH;     // TCS34725 breakout LED logic level when ON.
-constexpr uint8_t colorSensorLEDOffLevel = LOW;     // TCS34725 breakout LED logic level when OFF.
 constexpr unsigned long greenBlinkOnMs = 100UL;     // Acknowledgement blink ON duration.
 constexpr unsigned long greenBlinkOffMs = 50UL;     // Acknowledgement blink OFF duration.
 constexpr unsigned long sirenSweepMs = 800UL;       // Time for each siren pitch sweep up or down.
@@ -309,18 +370,14 @@ constexpr int sirenFmax = 800;                      // Siren high pitch.
 constexpr uint16_t BATTERY_ALERT_TONE_HZ = 1500;    // Tone used for low-battery alerts.
 constexpr uint16_t buzzerPatternToneHz = 2200;      // Tone used by simple acknowledgement beeps.
 
-// --- Shared safety checks ---
-// Define ENABLE_SHARED_SAFETY_CHECKS=0 in a build override to compile out this block.
-#ifndef ENABLE_SHARED_SAFETY_CHECKS
-#define ENABLE_SHARED_SAFETY_CHECKS 0
-#endif
+// === COMPILE TIME ASSERTION CHECKING ============================================================
 
-#if ENABLE_SHARED_SAFETY_CHECKS
 // static_assert(condition, "message") is a *compile-time* check: the compiler evaluates the
 // condition while building the sketch, and if it is false, the build fails immediately with the
 // given message instead of producing a train that could misbehave. Unlike a runtime "if" check,
 // this costs zero flash/RAM and catches a bad configuration (for example, mixed-up threshold
 // constants) before the code is ever uploaded to the Arduino.
+
 static_assert(VIN_BATTERY_SHUTDOWN_MAX_MV < BATTERY_LOW_WARNING_MV, "VIN shutdown range must sit below the warning threshold.");
 // Guards against debug leftovers: a 2S lithium pack must never be discharged below ~6.0 V, so a
 // warning threshold under 6000 mV can only be an accidental test value (this exact bug shipped
@@ -342,4 +399,4 @@ static_assert(AUTO_DISTANCE_RESTART <= AUTO_DISTANCE_MIN_SPEED, "AUTO_DISTANCE_M
 static_assert(AUTO_DISTANCE_MIN_SPEED < AUTO_DISTANCE_MAX_SPEED, "AUTO_DISTANCE_MIN_SPEED must be below AUTO_DISTANCE_MAX_SPEED.");
 static_assert(IDLE_SLEEP_WARNING_LEAD_MS < idleTimeout, "Idle sleep warning lead must be shorter than the idle timeout.");
 static_assert(sirenFmin < sirenFmax, "Siren minimum frequency must be below the maximum frequency.");
-#endif
+static_assert(markerFeedbackColorCount == MarkerClassCount, "Marker feedback colors must match the TrackMarkerClass entries.");

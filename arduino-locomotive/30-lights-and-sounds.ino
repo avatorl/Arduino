@@ -11,6 +11,9 @@
       DBGLN_LEDS(F("MCP23008 not found; train LEDs expect the expander wiring"));
       return;
     }
+    #if defined(__AVR__)
+    wdt_reset();
+    #endif
 
     const LedRoute routes[] = { led1R, led1G, led1B, led2R, led2G, led2B, ledGreen, ledRearRed };
     for (uint8_t i = 0; i < sizeof(routes) / sizeof(routes[0]); ++i) {
@@ -18,25 +21,31 @@
       trainLedExpander.digitalWrite(routes[i].expanderPin, LOW);
     }
 
-    // Confirm the expander and every light channel at boot. GP7 drives the two rear
-    // red LEDs and remains asserted after the RGB and green channels turn off.
-    trainLedExpander.digitalWrite(led1R.expanderPin, HIGH);
-    trainLedExpander.digitalWrite(led1G.expanderPin, HIGH);
-    trainLedExpander.digitalWrite(led1B.expanderPin, HIGH);
-    trainLedExpander.digitalWrite(led2R.expanderPin, HIGH);
-    trainLedExpander.digitalWrite(led2G.expanderPin, HIGH);
-    trainLedExpander.digitalWrite(led2B.expanderPin, HIGH);
-    trainLedExpander.digitalWrite(ledGreen.expanderPin, HIGH);
+    // Keep the complete startup light check within the 2-second watchdog window.
+    auto setStartupRgb = [](bool r, bool g, bool b) {
+      trainLedExpander.digitalWrite(led1R.expanderPin, r ? HIGH : LOW);
+      trainLedExpander.digitalWrite(led1G.expanderPin, g ? HIGH : LOW);
+      trainLedExpander.digitalWrite(led1B.expanderPin, b ? HIGH : LOW);
+      trainLedExpander.digitalWrite(led2R.expanderPin, r ? HIGH : LOW);
+      trainLedExpander.digitalWrite(led2G.expanderPin, g ? HIGH : LOW);
+      trainLedExpander.digitalWrite(led2B.expanderPin, b ? HIGH : LOW);
+    };
     trainLedExpander.digitalWrite(ledRearRed.expanderPin, HIGH);
+    trainLedExpander.digitalWrite(ledGreen.expanderPin, HIGH);
+    setStartupRgb(true, false, false);
+    delay(300);
+    setStartupRgb(false, true, false);
+    delay(300);
+    setStartupRgb(false, false, true);
+    delay(300);
+    setStartupRgb(true, true, true);
+    #if defined(__AVR__)
+    wdt_reset();
+    #endif
     delay(1000);
-
-    trainLedExpander.digitalWrite(led1R.expanderPin, LOW);
-    trainLedExpander.digitalWrite(led1G.expanderPin, LOW);
-    trainLedExpander.digitalWrite(led1B.expanderPin, LOW);
-    trainLedExpander.digitalWrite(led2R.expanderPin, LOW);
-    trainLedExpander.digitalWrite(led2G.expanderPin, LOW);
-    trainLedExpander.digitalWrite(led2B.expanderPin, LOW);
+    setStartupRgb(false, false, false);
     trainLedExpander.digitalWrite(ledGreen.expanderPin, LOW);
+    trainLedExpander.digitalWrite(ledRearRed.expanderPin, LOW);
 
     DBGLN_LEDS(F("MCP23008 ready for train LEDs"));
   }
@@ -225,6 +234,7 @@
 
   // Rear red OUT7 channel is reserved for battery warning, shutdown, and inactivity-sleep indication.
   void SetRearRedLight(bool enabled) {
+    if (lightsBlackoutActive) enabled = false;
     writeTrainOutput(ledRearRed, enabled);
   }
 
@@ -232,7 +242,7 @@
     writeRGBPins(led1R, led1G, led1B, false, false, false);
     writeRGBPins(led2R, led2G, led2B, false, false, false);
     writeTrainOutput(ledGreen, false);
-    digitalWrite(pinColorSensorLED, colorSensorLEDOffLevel);
+    digitalWrite(pinColorSensorLED, LOW);
     SetRearRedLight(true);
   }
 
@@ -241,7 +251,17 @@
   void SetRGBLight(bool R, bool G, bool B, int led) {
     if (criticalOvervoltageLatched) return;
     if (FrontLightOnOff == 0) return;
+    if (whiteMarkerRgbOverrideActive && (R || G || B)) {
+      R = false;
+      G = false;
+      B = false;
+    }
     if (!areRgbLightsAllowed()) {
+      R = false;
+      G = false;
+      B = false;
+    }
+    if (lightsBlackoutActive) {
       R = false;
       G = false;
       B = false;
@@ -270,15 +290,6 @@
   // Apply status color unless siren/sensor mode overrides it.
   inline void SetRGBColor(RgbColor color, int led) {
     if (sirenActive) return;  // ignore during siren
-    if (ColorSensorOnOff == 1 && color != RgbColor::Off) {
-      if (led == 0 || led == 1) {
-        SetRGBLightColor(RgbColor::Cyan, 1);
-      }
-      if (led == 0 || led == 2) {
-        SetRGBLightColor(color, 2);
-      }
-      return;
-    }
     SetRGBLightColor(color, led);
   }
 
@@ -288,6 +299,7 @@
     // analogWrite(pinLEDGreen, Value);
     // The green status LED is driven through the expander-backed output stage.
     if (!isGreenIndicatorAllowed()) Value = 0;
+    if (lightsBlackoutActive) Value = 0;
     writeTrainOutput(ledGreen, (Value > 0));  // Any non-zero means ON
   }
 
@@ -302,19 +314,19 @@
     if (sirenActive) return;
 
     SetGreenLightValue(AutoDistanceOnOff ? 255 : 0);
+    SetRearRedLight(true);
+    if (markerColorBlinkActive) return;
 
-    // Jog PWM is deliberately separate from manual Speed. Pending reversals and boost also
-    // need their own colors, including when a siren ends or a tilt recovery refreshes the LEDs.
+    if (ColorSensorOnOff == 1) {
+      SetRGBLightColor(RgbColor::White);
+      return;
+    }
+
     RgbColor driveColor = RgbColor::Red;
     if (motorDrivePending) driveColor = RgbColor::Yellow;
-    else if (boostActive) driveColor = RgbColor::Magenta;
+    else if (boostActive) driveColor = RgbColor::Blue;
     else if (motorOutputActive) {
-      driveColor = lastMotorDriveDirection == Dir::Backward ? RgbColor::Blue : RgbColor::White;
-    }
-    if (ColorSensorOnOff == 1) {
-      SetRGBLightColor(RgbColor::Cyan, 1);
-      SetRGBLightColor(driveColor, 2);
-      return;
+      driveColor = lastMotorDriveDirection == Dir::Backward ? RgbColor::Magenta : RgbColor::White;
     }
 
     SetRGBColor(driveColor);
@@ -353,7 +365,8 @@
 
   // Force the train into its final no-recovery sleep state after shutdown.
   void performPermanentShutdown() {
-    DBGLN_POWER_MANAGEMENT(F("Permanent shutdown: entering sleep forever"));
+    DBGLN_POWER_MANAGEMENT(F("\033[0;31;49mPERMANENT SHUTDOWN. CHARGE THE BATTERY.\033[0m"));
+    delay(100);  // Give the debug message time to be output before shutting down
     #if defined(__AVR__)
     wdt_disable();
     #endif
@@ -366,26 +379,22 @@
     motorDrivePending = false;
     boostActive = false;
     sirenActive = false;
-    stopMelody();
-    clearBuzzerPattern();
-    noTone(pinBuzzer);
-    digitalWrite(pinBuzzer, LOW);
-    Stop();
-    digitalWrite(pinMotorSleep, LOW);
-    digitalWrite(pinDistanceSensorXSHUT, LOW);
+    stopMelody(); // stop any ongoing melody
+    clearBuzzerPattern(); // clear any queued buzzer patterns
+    noTone(pinBuzzer); // stop any tone currently playing on the buzzer
+    digitalWrite(pinBuzzer, LOW); // turn off the buzzer
+    Stop(); // stop the motor
+    digitalWrite(pinMotorSleep, LOW); // put the motor driver to sleep
+    digitalWrite(pinDistanceSensorXSHUT, LOW); // power down the distance sensor
     distanceTofDetected = false;
-    powerDownColorSensorCore();
-    digitalWrite(pinColorSensorLED, colorSensorLEDOffLevel);
-    // After a critical overvoltage the rear red indicator intentionally stays ON during the final
-    // sleep, so the user can still see WHY the train died until power is removed. The MCP23008
-    // keeps driving its outputs while the Nano sleeps. For ordinary low-battery shutdowns the
-    // light goes off to save the pack.
-    SetRearRedLight(criticalOvervoltageLatched);
-    SetGreenLightValue(0);
-    SetRGBLight(false, false, false, 0);
+    powerDownColorSensorCore(); // power down the color sensor core
+    digitalWrite(pinColorSensorLED, LOW); // turn off the color sensor LED
+    SetRearRedLight(false); // turn off the rear red LEDs
+    SetGreenLightValue(0); // turn off the green LED
+    SetRGBLight(false, false, false, 0); // turn off the RGB lights
     if (irReceiverStarted) {
-      IrReceiver.stop();
-      irReceiverStarted = false;
+      IrReceiver.stop(); // stop the IR receiver
+      irReceiverStarted = false; // mark the IR receiver as stopped
     }
     // detachInterrupt() disconnects the wake-up interrupt so the pin can no longer trigger the
     // wakeUp() ISR (see 50-power-management.ino) - appropriate here because this is a *permanent*

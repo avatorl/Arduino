@@ -94,6 +94,13 @@
     }
   }
 
+  void playRandomMelody() {
+    static const uint8_t melodyButtons[] = {
+      button1, button2, button3, button4, button5, button6, button7, button8
+    };
+    tryPlayMelodyForButton(melodyButtons[(uint8_t)random(0L, 8L)]);
+  }
+
   // Only mapped buttons count as activity or alter train state.
   bool isKnownIRCommand(uint8_t code) {
     switch (code) {
@@ -236,8 +243,7 @@
     // with a short audible cue. Stop and the auto-mode toggle remain available so the driver can
     // always stop.
     if (AutoDistanceOnOff && (code == buttonCHminus || code == buttonCHplus
-        || code == buttonMinus || code == buttonPlus || code == buttonBackward
-        || code == buttonForward)) {
+        || code == buttonPlus || code == buttonForward)) {
       DBGLN_IR_REMOTE(F("Ignored: manual motor control while AUTO is active"));
       playPattern(pattern_autoModeRejected);
       return;
@@ -302,7 +308,11 @@
 
       case buttonMinus:
         {  // - ramped momentary backward jog
-          if (AutoDistanceOnOff == 0 && Speed == 0) {
+          if (AutoDistanceOnOff) {
+            Stop();
+            startJog(Dir::Backward, buttonMinus, true);
+            DBGLN_MOTOR(F("Ramped BACKWARD: AUTO paused while held"));
+          } else if (Speed == 0) {
             startJog(Dir::Backward, buttonMinus, true);
             DBGLN_MOTOR(F("Ramped BACKWARD running (hold to accelerate)"));
           } else {
@@ -324,12 +334,12 @@
 
       case buttonBackward:
         {  // << momentary backward (jog)
-          // Jog only starts from a fully stationary train: Speed == 0 rules out an active manual
-          // forward/backward drive, and AutoDistanceOnOff == 0 rules out auto-distance mode (auto
-          // can also leave Speed == 0 momentarily while waiting for an obstacle to clear, so both
-          // checks are required). Direction is fixed by the button pressed; this button always runs
-          // at the fixed step-1 speed (pwmSteps[1]) regardless of the last selected manual step.
-          if (AutoDistanceOnOff == 0 && Speed == 0) {
+          // Backward jog pauses AUTO without clearing it; release resumes automatic control.
+          if (AutoDistanceOnOff) {
+            Stop();
+            startJog(Dir::Backward, buttonBackward, false);
+            DBGLN_MOTOR(F("Momentary BACKWARD: AUTO paused while held"));
+          } else if (Speed == 0) {
             startJog(Dir::Backward, buttonBackward, false);
             DBGLN_MOTOR(F("Momentary BACKWARD running (hold to move)"));
           } else {

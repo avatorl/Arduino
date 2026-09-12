@@ -1,5 +1,11 @@
 .arduino-build-debug*/
 _BACKUP/
+backup/
+backups/
+_original-model/
+original-model/
 docs-internal/
-test/
+superpowers/
+docs/superpowers/
+test*/
 _/
