@@ -1,4 +1,5 @@
 .arduino-build-debug*/
+.github/
 _BACKUP/
 backup/
 backups/
