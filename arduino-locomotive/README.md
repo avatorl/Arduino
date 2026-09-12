@@ -7,25 +7,7 @@ with an IR remote, or use automatic obstacle-aware speed control.
 
 The electronics are packaged inside a 3D-printed DUPLO-compatible locomotive body. The Arduino Nano, motor driver, battery power hardware, sensors, LED wiring, and I2C expander are assembled on compact boards within the chassis.
 
-![Locomotive electronics, view 1](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-ust0wejp8koh1.jpg)
-*Motor and TCS34725 sensor on the bottom.*
-![Locomotive electronics, view 2](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-avz914ohbkoh1.jpg)
-*Battery pack: 2S 18650 cells with BMS, Arduino Nano, and MCP23008/MOSFET LED-control module.*
-![Locomotive electronics, view 3](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-lus9s7xhdkoh1.jpg)
-*TSOP4838 IR receiver.*
-![Locomotive electronics, view 4](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-6howe1a39koh1.jpg)
-*DRV8833 motor driver.*
-![Locomotive electronics, view 5](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-bfgfo89t8koh1.jpg)
-*LS-LISC-V3 USB charger for the 2S 18650 battery pack.*
-![Locomotive electronics, view 6](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-h195qvd9akoh1.jpg)
-*IR receiver, battery-level indicator, buzzer, and on/off button.*
-![Locomotive electronics, view 7](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-hk36mkrfckoh1.jpg)
-*Arduino Nano on perfboard with the tilt sensor and battery-voltage divider.*
-![Locomotive electronics, view 8](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-nld4eoi69koh1.jpg)
-*Component hidden beneath the battery pack.*
-![Locomotive electronics, view 9](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-xtm4e78tbkoh1.jpg)
-*VL53L0X laser distance sensor.*
-![Locomotive electronics, view 10](docs/Inside%20of%20the%20Arduino%20locomotive%20_%20r_arduino_files/inside-of-the-arduino-locomotive-v0-xz6ehgmofkoh1.png)
+![Inside of the Arduino locomotive](docs/images/inside-of-the-arduino-locomotive-v0-xz6ehgmofkoh1.png)
 *Inside of the Arduino locomotive.*
 
 ## What it does
