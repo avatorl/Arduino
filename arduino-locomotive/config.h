@@ -263,6 +263,9 @@ constexpr unsigned long colorSensorReadEveryMs = 30UL; // Time between color-sen
 constexpr uint8_t colorMarkerConfirmationSamples = 2;
 // The confirmed marker is cleared after this many consecutive unknown readings.
 constexpr uint8_t colorMarkerLeaveSamples = 2;
+// Ignore green readings briefly after reversing so the same physical marker
+// cannot immediately reverse the train again as it travels back over it.
+constexpr unsigned long colorGreenMarkerCooldownMs = 1500UL;
 // Controls how long confirmed-marker visual feedback stays visible; sensing continues meanwhile.
 constexpr unsigned long colorMarkerFeedbackDurationMs = 1000UL;
 

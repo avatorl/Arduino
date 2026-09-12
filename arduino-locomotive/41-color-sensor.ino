@@ -72,6 +72,7 @@ uint8_t confirmedTrackMarkerClass = MarkerUnknown;
 uint8_t candidateTrackMarkerClass = MarkerUnknown;
 uint8_t candidateTrackMarkerSamples = 0;
 uint8_t markerLeaveSamples = 0;
+unsigned long greenMarkerIgnoreUntil = 0;
 
 void resetMarkerCandidate() {
   candidateTrackMarkerClass = MarkerUnknown;
@@ -84,6 +85,7 @@ void resetTrackMarkerDetectionState() {
   confirmedTrackMarkerClass = MarkerUnknown;
   resetMarkerCandidate();
   resetMarkerLeaveConfirmation();
+  greenMarkerIgnoreUntil = 0;
 }
 
 // Put the TCS34725 core into sleep
@@ -292,12 +294,17 @@ void handleTrackMarkerAction(uint8_t markerClass) {
     break;
 
   case MarkerGreen:
+    if ((long)(millis() - greenMarkerIgnoreUntil) < 0) {
+      DBGLN_COLOR_SENSOR(F("Green: ignored during reverse cooldown"));
+      break;
+    }
     if (!boostActive && !AutoDistanceOnOff && Speed != 0) {
       DBGLN_COLOR_SENSOR(F("Green: reverse"));
       if (MotorDirection == 1)
         GoBackward();
       else
         GoForward();
+      greenMarkerIgnoreUntil = millis() + colorGreenMarkerCooldownMs;
     } else {
       DBGLN_COLOR_SENSOR(F("Green: ignored in this train mode"));
     }
