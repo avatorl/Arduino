@@ -24,8 +24,6 @@ The electronics are packaged inside a 3D-printed DUPLO-compatible locomotive bod
 ![Locomotive electronics, view 8](docs/images/inside-of-the-arduino-locomotive-v0-nld4eoi69koh1.jpg)
 *Component hidden beneath the battery pack.*
 ![Locomotive electronics, view 9](docs/images/inside-of-the-arduino-locomotive-v0-xtm4e78tbkoh1.jpg)
-*VL53L0X laser distance sensor.*
-![Inside of the Arduino locomotive](docs/images/inside-of-the-arduino-locomotive-v0-xz6ehgmofkoh1.png)
 *Inside of the Arduino locomotive.*
 
 ## What it does
@@ -53,7 +51,7 @@ The electronics are packaged inside a 3D-printed DUPLO-compatible locomotive bod
 - 2S USB charger module
 - Main power switch
 - Fuse
-- VL53L0X distance sensor
+- VL53L1X distance sensor
 - SW-520D tilt sensor
 - TCS34725 color sensor
 - MCP23008 I2C GPIO expander
