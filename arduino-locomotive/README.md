@@ -15,16 +15,16 @@ The electronics are packaged inside a 3D-printed DUPLO-compatible locomotive bod
 *TSOP4838 IR receiver.*
 ![Locomotive electronics, view 4](docs/images/inside-of-the-arduino-locomotive-v0-6howe1a39koh1.jpg)
 *DRV8833 motor driver.*
+![Locomotive electronics, view 8](docs/images/inside-of-the-arduino-locomotive-v0-nld4eoi69koh1.jpg)
+*Motor driver is hidden beneath the battery pack.*
 ![Locomotive electronics, view 5](docs/images/inside-of-the-arduino-locomotive-v0-bfgfo89t8koh1.jpg)
 *LS-LISC-V3 USB charger for the 2S 18650 battery pack.*
 ![Locomotive electronics, view 6](docs/images/inside-of-the-arduino-locomotive-v0-h195qvd9akoh1.jpg)
 *IR receiver, battery-level indicator, buzzer, and on/off button.*
 ![Locomotive electronics, view 7](docs/images/inside-of-the-arduino-locomotive-v0-hk36mkrfckoh1.jpg)
 *Arduino Nano on perfboard with the tilt sensor and battery-voltage divider.*
-![Locomotive electronics, view 8](docs/images/inside-of-the-arduino-locomotive-v0-nld4eoi69koh1.jpg)
-*Component hidden beneath the battery pack.*
-![Locomotive electronics, view 9](docs/images/inside-of-the-arduino-locomotive-v0-xtm4e78tbkoh1.jpg)
-*Inside of the Arduino locomotive.*
+![Electronics circuit](docs/images/inside-of-the-arduino-locomotive-v0-xz6ehgmofkoh1.png)
+*Electronics circuit*
 
 ## What it does
 
