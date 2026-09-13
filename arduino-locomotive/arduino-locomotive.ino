@@ -30,7 +30,7 @@
 //   - 20-motor.ino
 //   - 30-lights-and-sounds.ino
 //   - 41-color-sensor.ino
-//   - 42-distance-sensor-vl53l0x.ino
+//   - 42-distance-sensor.ino
 //   - 50-power-management.ino
 
 // ===============================================================================================

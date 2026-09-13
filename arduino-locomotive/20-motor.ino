@@ -79,7 +79,7 @@
     momentaryButton = 0;
   }
 
-  // Return a beginner-friendly label for the current manual speed level.
+  // Return a user-friendly label for the current manual speed level.
   const __FlashStringHelper* motorLevelLabel(uint8_t step) {
     switch (step) {
       case 0: return F("0");
@@ -124,6 +124,7 @@
   }
 
   // Audible confirmation for the selected manual step.
+  // Speed 1 - beep once, Speed 2 - beep twice, etc.
   void playStepBeep(int step) {
     if (!areUserSoundsAllowed() || SoundOnOff != 1) return;  // respect mute and battery policy
     if (batterySignalActive || sirenActive) return;

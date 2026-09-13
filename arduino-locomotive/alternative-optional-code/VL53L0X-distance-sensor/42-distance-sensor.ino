@@ -1,5 +1,7 @@
 #include <VL53L0X.h>
 
+// USE THIS FILE WITH THE VL53L0X DISTANCE SENSOR
+
 // The VL53L0X is a time-of-flight (ToF) distance sensor: it sends invisible
 // infrared light and measures how long the reflection takes to return. The
 // Pololu library below handles its I2C register protocol; this tab turns its

@@ -34,7 +34,7 @@
 // via a build tool's extra compiler flags) without needing to edit config.h at all. If nothing
 // else defines it first, this file provides the default value shown here.
 #ifndef ENABLE_EEPROM_LOGGING
-#define ENABLE_EEPROM_LOGGING 0
+#define ENABLE_EEPROM_LOGGING 1
 #endif
 
 // Per-module debug flags. Turn on one or multiple while troubleshooting. Turn off for normal train operation.
@@ -53,13 +53,13 @@
 #define DEBUG_COLOR_SENSOR 0
 #endif
 #ifndef DEBUG_DISTANCE_SENSOR
-#define DEBUG_DISTANCE_SENSOR 0
+#define DEBUG_DISTANCE_SENSOR 1
 #endif
 #ifndef DEBUG_TILT_SENSOR
 #define DEBUG_TILT_SENSOR 0
 #endif
 #ifndef DEBUG_POWER_MANAGEMENT
-#define DEBUG_POWER_MANAGEMENT 1
+#define DEBUG_POWER_MANAGEMENT 0
 #endif
 #ifndef DEBUG_LEDS
 #define DEBUG_LEDS 0
@@ -91,6 +91,9 @@
 constexpr uint8_t mcp23008Address = 0x20; // (A0, A1, A2 pulled LOW by default)
 // constexpr uint8_t tcs34725Address = 0x29; // Reference only: Adafruit_TCS34725 uses the fixed default 0x29 address.
 constexpr uint8_t distanceSensorAddress = 0x2A; // Distance sensor = 0x2A (changed from default 0x29 using XSHUT pin)
+// VL53L1X_ULD follows ST's convention and accepts the 8-bit I2C address byte.
+constexpr uint8_t distanceSensorDefaultAddress8Bit = 0x52;
+constexpr uint8_t distanceSensorAddress8Bit = distanceSensorAddress << 1;
 
 // === ARDUINO PIN MAPPING ========================================================================
 
@@ -181,17 +184,17 @@ constexpr uint8_t NORMAL_MAX_SPEED_STEP = 3;         // Highest regular manual s
 constexpr uint8_t BOOST_SPEED_STEP = 4;              // Extra manual step reserved for boost.
 constexpr uint16_t voltageSteps[] = { 0, 3500, 4500, 6000, 7500 }; // Requested motor mV for steps 0..4.
 constexpr int rampStep = 5;                          // PWM change per auto-speed ramp update.
-constexpr unsigned long rampDelay = 80UL;            // Delay between ramp steps in auto mode.
+constexpr unsigned long rampDelay = 10UL;            // Delay between ramp steps in auto mode.
 // Median of 3 keeps single-sample glitches out while reacting one full sample sooner than a
 // median of 5 (about 60 ms faster at the 30 ms read period) - important for a short DUPLO train
 // approaching an obstacle at speed.
-constexpr int AUTO_SAMPLES_FOR_MEDIAN = 3;           // Distance samples kept for median filtering.
+constexpr int AUTO_SAMPLES_FOR_MEDIAN = 5;           // Distance samples kept for median filtering.
 // STOP and RESTART form a hysteresis band (see motorVoltageFromDistance() in 20-motor.ino):
 // the train stops when an obstacle comes closer than STOP and will not move again until the
 // obstacle has cleared past RESTART. The gap prevents rapid stop/start oscillation when an
 // obstacle sits right at the boundary.
-constexpr int AUTO_DISTANCE_STOP = 14;                // Stop auto drive when obstacle is closer than this (cm).
-constexpr int AUTO_DISTANCE_RESTART = 18;            // Start moving again once obstacle clears this distance (cm).
+constexpr int AUTO_DISTANCE_STOP = 10;                // Stop auto drive when obstacle is closer than this (cm).
+constexpr int AUTO_DISTANCE_RESTART = 12;            // Start moving again once obstacle clears this distance (cm).
 constexpr int AUTO_DISTANCE_MAX_SPEED = 80;          // Distance at which auto mode may request full normal speed (cm).
 constexpr int AUTO_DISTANCE_MIN_SPEED = 30;          // Distance at which auto mode slows down to the minimal speed (cm).
 
@@ -303,13 +306,59 @@ constexpr uint8_t markerClusterCount = sizeof(markerClusters) / sizeof(markerClu
 
 // === DISTANCE SENSOR SETTINGS ===================================================================
 
-// Distance-sensor timing and fault handling.
-constexpr uint16_t distanceTofTimeoutMs = 30;           // Timeout for one measurement attempt.
-constexpr uint32_t distanceTofTimingBudgetUs = 30000UL; // Measurement timing budget.
-// A 1.0 Mcps return-strength threshold is stable at the required sub-50 cm range.
-constexpr float distanceTofSignalRateLimitMcps = 1.0f;
-constexpr uint32_t distanceTofContinuousPeriodMs = 30UL;
-constexpr unsigned long tofReadEveryMs = distanceTofContinuousPeriodMs; // How often the sketch consumes a ToF reading.
+// Values calibrated for this VL53L1X in time-of-flight-1a. The reference
+// sketch stores the offset as raw uint16 value 63491; that is -2045 as the
+// signed value the ULD API expects. Recalibrate before changing either value.
+constexpr int16_t distanceTofOffsetMm = -2045;
+constexpr uint16_t distanceTofXtalkCps = 108;
+// Long mode and a 50 ms timing budget maintain a valid signal through the
+// narrowed 4 x 4 cone better than the earlier short/20 ms profile.
+constexpr uint16_t distanceTofTimingBudgetMs = 50;
+constexpr uint32_t distanceTofInterMeasurementMs = 50UL;
+constexpr unsigned long tofReadEveryMs = distanceTofInterMeasurementMs; // How often the sketch consumes a ToF reading.
+// The verified standalone setup measured this sensor about 30 mm short below
+// 500 mm. Apply that correction only in its calibrated near-range region.
+constexpr uint16_t distanceTofNearRangeCorrectionLimitMm = 500;
+constexpr uint16_t distanceTofNearRangeOffsetMm = 30;
+// The VL53L1X normally sees a ~27-degree cone through its complete 16 x 16
+// SPAD array. Restricting the measurement to this centred 4 x 4 region narrows
+// the cone to about 15 degrees, rejecting nearby track and body reflections.
+constexpr uint8_t distanceTofRoiWidthSpads = 4;
+constexpr uint8_t distanceTofRoiHeightSpads = 4;
+// The 4 x 4 measurement window is selected from the VL53L1X's full 16 x 16
+// SPAD matrix. SPAD IDs are not arranged numerically left-to-right or
+// top-to-bottom, so do not infer a physical offset from an ID increment:
+//
+//        col:   0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15
+// row  0:    128 136 144 152 160 168 176 184 192 200 208 216 224 232 240 248
+// row  1:    129 137 145 153 161 169 177 185 193 201 209 217 225 233 241 249
+// row  2:    130 138 146 154 162 170 178 186 194 202 210 218 226 234 242 250
+// row  3:    131 139 147 155 163 171 179 187 195 203 211 219 227 235 243 251
+// row  4:    132 140 148 156 164 172 180 188 196 204 212 220 228 236 244 252
+// row  5:    133 141 149 157 165 173 181 189 197 205 213 221 229 237 245 253
+// row  6:    134 142 150 158 166 174 182 190 198 206 214 222 230 238 246 254
+// row  7:    135 143 151 159 167 175 183 191 199 207 215 223 231 239 247 255
+// row  8:    127 119 111 103  95  87  79  71  63  55  47  39  31  23  15   7
+// row  9:    126 118 110 102  94  86  78  70  62  54  46  38  30  22  14   6
+// row 10:    125 117 109 101  93  85  77  69  61  53  45  37  29  21  13   5
+// row 11:    124 116 108 100  92  84  76  68  60  52  44  36  28  20  12   4
+// row 12:    123 115 107  99  91  83  75  67  59  51  43  35  27  19  11   3
+// row 13:    122 114 106  98  90  82  74  66  58  50  42  34  26  18  10   2
+// row 14:    121 113 105  97  89  81  73  65  57  49  41  33  25  17   9   1
+// row 15:    120 112 104  96  88  80  72  64  56  48  40  32  24  16   8   0
+//
+// Factory-calibrated optical center read from this specific VL53L1X module.
+// ST specifies a possible -2 to +2 SPAD variation on each axis. Update this
+// value if the sensor is replaced, using the reported debug value from a
+// factory-center read.
+constexpr uint8_t distanceTofFactoryRoiCenterSpad = 199;
+// Choose the desired 4 x 4 ROI centre from the matrix above. For reference,
+// 197 is two matrix rows above factory center 199; the physical up/down
+// direction depends on breakout orientation, so verify it with a
+// target-position test. For an even 4 x 4 ROI, use the upper-right SPAD at
+// the desired centre point. This setting changes where the sensor looks, not
+// any drive threshold.
+constexpr uint8_t distanceTofRoiCenterSpad = 199;
 constexpr unsigned long tofFailureGraceMs = 250UL;     // Keep using the last good reading for this long before declaring a fault.
 // If the sensor never delivers a single valid reading within this time after ranging starts,
 // something is wrong (loose wire, dead sensor) and a distance fault is latched instead of the
@@ -396,6 +445,9 @@ static_assert(BATTERY_IMPLAUSIBLE_MV < VIN_BATTERY_SHUTDOWN_MAX_MV, "Implausible
 static_assert(VCC_LOW_SHUTDOWN_MV > 4500, "VCC shutdown threshold must stay above the 16MHz ATmega328P minimum.");
 static_assert(NORMAL_MAX_SPEED_STEP < BOOST_SPEED_STEP, "Boost step must come after the normal top step.");
 static_assert(MOMENTARY_RAMP_DURATION_MS > 0, "Momentary ramp duration must be nonzero.");
+static_assert(distanceTofTimingBudgetMs <= distanceTofInterMeasurementMs, "VL53L1X inter-measurement period must cover its timing budget.");
+static_assert(distanceTofRoiWidthSpads >= 4 && distanceTofRoiWidthSpads <= 16, "VL53L1X ROI width must be 4 through 16 SPADs.");
+static_assert(distanceTofRoiHeightSpads >= 4 && distanceTofRoiHeightSpads <= 16, "VL53L1X ROI height must be 4 through 16 SPADs.");
 static_assert(AUTO_DISTANCE_STOP < AUTO_DISTANCE_RESTART, "AUTO_DISTANCE_STOP must be below AUTO_DISTANCE_RESTART.");
 static_assert(AUTO_DISTANCE_RESTART < AUTO_DISTANCE_MAX_SPEED, "AUTO_DISTANCE_RESTART must be below AUTO_DISTANCE_MAX_SPEED.");
 static_assert(AUTO_DISTANCE_RESTART <= AUTO_DISTANCE_MIN_SPEED, "AUTO_DISTANCE_MIN_SPEED must not be below AUTO_DISTANCE_RESTART.");
