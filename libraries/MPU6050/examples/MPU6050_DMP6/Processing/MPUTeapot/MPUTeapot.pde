@@ -96,38 +96,50 @@ void draw() {
 
 void serialEvent(Serial port) {
     interval = millis();
-    while (port.available() > 0) {
+    
+    // Process while there is enough raw data to form at least one full teapot packet (14 bytes)
+    while (port.available() >= 14) {
         int ch = port.read();
 
-        if (synced == 0 && ch != '$') return;   //Initial synchronization - also used to resync/realign if needed
-        synced = 1;
-        print ((char)ch);
-
-        if ((serialCount == 1 && ch != 2)
-            || (serialCount == 12 && ch != '\r')
-            || (serialCount == 13 && ch != '\n'))  {
-            serialCount = 0;
-            synced = 0;
-            return;
-        }
-
-        if (serialCount > 0 || ch == '$') {
-            teapotPacket[serialCount++] = (char)ch;
-            if (serialCount == 14) {
-                serialCount = 0; // restart packet byte position
+        // 1. Hunt for the start packet sequence '$' followed by 0x02
+        if (ch == '$') {
+            int checkType = port.read();
+            if (checkType == 2) {
                 
-                /*Get Quaternion from data packet*/
-                q[0] = ((teapotPacket[2] << 8) | teapotPacket[3]) / 16384.0f;
-                q[1] = ((teapotPacket[4] << 8) | teapotPacket[5]) / 16384.0f;
-                q[2] = ((teapotPacket[6] << 8) | teapotPacket[7]) / 16384.0f;
-                q[3] = ((teapotPacket[8] << 8) | teapotPacket[9]) / 16384.0f;
-                for (int i = 0; i < 4; i++) if (q[i] >= 2) q[i] = -4 + q[i];
+                // 2. We have a confirmed header match. Read the remaining 12 data bytes immediately.
+                byte[] dataBuffer = new byte[12];
+                port.readBytes(dataBuffer);
                 
-                quat.set(q[0], q[1], q[2], q[3]);   //Set our ToxicLibs quaternion to new data
+                // 3. Perform a footer verification to confirm structural packet alignment
+                if (dataBuffer[10] == '\r' && dataBuffer[11] == '\n') {
+                    
+                    // 4. Reconstruct signed 16-bit short integers from individual byte indices safely
+                    short q0_raw = (short)((dataBuffer[0] << 8) | (dataBuffer[1] & 0xFF));
+                    short q1_raw = (short)((dataBuffer[2] << 8) | (dataBuffer[3] & 0xFF));
+                    short q2_raw = (short)((dataBuffer[4] << 8) | (dataBuffer[5] & 0xFF));
+                    short q3_raw = (short)((dataBuffer[6] << 8) | (dataBuffer[7] & 0xFF));
+                    
+                    // 5. Convert raw bits into floating-point fractional Quaternions
+                    q[0] = q0_raw / 16384.0f;
+                    q[1] = q1_raw / 16384.0f;
+                    q[2] = q2_raw / 16384.0f;
+                    q[3] = q3_raw / 16384.0f;
+                    
+                    // 6. Normalize vector space to keep rotations rock-solid and freeze-proof
+                    float norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+                    if (norm > 0) {
+                        q[0] /= norm; q[1] /= norm; q[2] /= norm; q[3] /= norm;
+                    }
+
+                    // Push mathematically sound values straight to the visualizer matrix
+                    quat.set(q[0], q[1], q[2], q[3]);   
+                }
             }
         }
     }
 }
+
+
 
 void drawCylinder(float topRadius, float bottomRadius, float tall, int sides) {
     float angle = 0;

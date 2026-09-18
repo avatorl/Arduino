@@ -53,7 +53,7 @@
 #define DEBUG_COLOR_SENSOR 0
 #endif
 #ifndef DEBUG_DISTANCE_SENSOR
-#define DEBUG_DISTANCE_SENSOR 1
+#define DEBUG_DISTANCE_SENSOR 0
 #endif
 #ifndef DEBUG_TILT_SENSOR
 #define DEBUG_TILT_SENSOR 0
@@ -185,18 +185,18 @@ constexpr uint8_t BOOST_SPEED_STEP = 4;              // Extra manual step reserv
 constexpr uint16_t voltageSteps[] = { 0, 3500, 4500, 6000, 7500 }; // Requested motor mV for steps 0..4.
 constexpr int rampStep = 5;                          // PWM change per auto-speed ramp update.
 constexpr unsigned long rampDelay = 10UL;            // Delay between ramp steps in auto mode.
-// Median of 3 keeps single-sample glitches out while reacting one full sample sooner than a
-// median of 5 (about 60 ms faster at the 30 ms read period) - important for a short DUPLO train
-// approaching an obstacle at speed.
-constexpr int AUTO_SAMPLES_FOR_MEDIAN = 5;           // Distance samples kept for median filtering.
+// An odd-sized median removes isolated high/low glitches without averaging
+// distances together. Five samples provide strong rejection at the configured
+// 50 ms sensor cadence while still accepting the first startup sample at once.
+constexpr int AUTO_SAMPLES_FOR_MEDIAN = 5;
 // STOP and RESTART form a hysteresis band (see motorVoltageFromDistance() in 20-motor.ino):
 // the train stops when an obstacle comes closer than STOP and will not move again until the
 // obstacle has cleared past RESTART. The gap prevents rapid stop/start oscillation when an
 // obstacle sits right at the boundary.
-constexpr int AUTO_DISTANCE_STOP = 10;                // Stop auto drive when obstacle is closer than this (cm).
-constexpr int AUTO_DISTANCE_RESTART = 12;            // Start moving again once obstacle clears this distance (cm).
-constexpr int AUTO_DISTANCE_MAX_SPEED = 80;          // Distance at which auto mode may request full normal speed (cm).
-constexpr int AUTO_DISTANCE_MIN_SPEED = 30;          // Distance at which auto mode slows down to the minimal speed (cm).
+constexpr int AUTO_DISTANCE_STOP = 14;                // Stop auto drive when obstacle is closer than this (cm).
+constexpr int AUTO_DISTANCE_RESTART = 18;            // Start moving again once obstacle clears this distance (cm).
+constexpr int AUTO_DISTANCE_MAX_SPEED = 30;          // Distance at which auto mode may request full normal speed (cm).
+constexpr int AUTO_DISTANCE_MIN_SPEED = 18;          // Distance at which auto mode slows down to the minimal speed (cm).
 
 // === COLOR SENSOR SETTINGS ======================================================================
 
@@ -306,16 +306,28 @@ constexpr uint8_t markerClusterCount = sizeof(markerClusters) / sizeof(markerClu
 
 // === DISTANCE SENSOR SETTINGS ===================================================================
 
-// Values calibrated for this VL53L1X in time-of-flight-1a. The reference
-// sketch stores the offset as raw uint16 value 63491; that is -2045 as the
-// signed value the ULD API expects. Recalibrate before changing either value.
+// Offset shifts the measured range to correct a consistent distance error.
+// Crosstalk compensates light reflected into the receiver by the sensor cover
+// or locomotive enclosure. Both values belong to this exact installed module
+// and optical path; recalibrate them after replacing or remounting the sensor.
+// The calibration sketch displayed the offset as raw uint16 value 63491, which
+// represents -2045 when interpreted as the signed value expected by the ULD.
 constexpr int16_t distanceTofOffsetMm = -2045;
 constexpr uint16_t distanceTofXtalkCps = 108;
-// Long mode and a 50 ms timing budget maintain a valid signal through the
-// narrowed 4 x 4 cone better than the earlier short/20 ms profile.
+// Short mode (selected in 42-distance-sensor.ino) is intended for nearby
+// obstacles and has better ambient-light immunity than Long mode.
+// Timing budget is how long one measurement integrates. Inter-measurement time
+// is the continuous-mode period and must be at least the timing budget.
 constexpr uint16_t distanceTofTimingBudgetMs = 50;
 constexpr uint32_t distanceTofInterMeasurementMs = 50UL;
-constexpr unsigned long tofReadEveryMs = distanceTofInterMeasurementMs; // How often the sketch consumes a ToF reading.
+// Polling the inexpensive data-ready register faster than the measurement
+// period avoids phase-locking into a miss/hit pattern. Actual result reads
+// still occur only when the sensor reports a completed measurement.
+constexpr unsigned long tofReadEveryMs = 10UL;
+// This sensor reports SignalFail when no target is in view. Several consecutive
+// completed SignalFail results are therefore treated as a clear path; isolated
+// failures retain the last valid distance instead.
+constexpr uint8_t distanceTofSignalFailClearCount = 3;
 // The verified standalone setup measured this sensor about 30 mm short below
 // 500 mm. Apply that correction only in its calibrated near-range region.
 constexpr uint16_t distanceTofNearRangeCorrectionLimitMm = 500;
@@ -359,11 +371,6 @@ constexpr uint8_t distanceTofFactoryRoiCenterSpad = 199;
 // the desired centre point. This setting changes where the sensor looks, not
 // any drive threshold.
 constexpr uint8_t distanceTofRoiCenterSpad = 199;
-constexpr unsigned long tofFailureGraceMs = 250UL;     // Keep using the last good reading for this long before declaring a fault.
-// If the sensor never delivers a single valid reading within this time after ranging starts,
-// something is wrong (loose wire, dead sensor) and a distance fault is latched instead of the
-// train waiting forever with no obstacle protection.
-constexpr unsigned long tofStartupGraceMs = 1000UL;
 
 // Tilt-sensor debounce. Increase if the sensor chatters, decrease if stop detection feels slow.
 constexpr unsigned long TILT_STABLE_MS = 1000UL;
@@ -445,7 +452,12 @@ static_assert(BATTERY_IMPLAUSIBLE_MV < VIN_BATTERY_SHUTDOWN_MAX_MV, "Implausible
 static_assert(VCC_LOW_SHUTDOWN_MV > 4500, "VCC shutdown threshold must stay above the 16MHz ATmega328P minimum.");
 static_assert(NORMAL_MAX_SPEED_STEP < BOOST_SPEED_STEP, "Boost step must come after the normal top step.");
 static_assert(MOMENTARY_RAMP_DURATION_MS > 0, "Momentary ramp duration must be nonzero.");
+static_assert(AUTO_SAMPLES_FOR_MEDIAN > 0 && (AUTO_SAMPLES_FOR_MEDIAN % 2) == 1, "Distance median sample count must be nonzero and odd.");
+static_assert(AUTO_SAMPLES_FOR_MEDIAN <= UINT8_MAX, "Distance median sample count must fit its uint8_t indexes.");
 static_assert(distanceTofTimingBudgetMs <= distanceTofInterMeasurementMs, "VL53L1X inter-measurement period must cover its timing budget.");
+static_assert(tofReadEveryMs > 0 && tofReadEveryMs <= distanceTofInterMeasurementMs, "VL53L1X polling interval must be nonzero and no slower than measurements.");
+static_assert(distanceTofSignalFailClearCount > 0, "VL53L1X clear-path confirmation count must be nonzero.");
+static_assert(AUTO_DISTANCE_MAX_SPEED <= UINT8_MAX, "Auto-distance control value must fit the uint8_t Distance state.");
 static_assert(distanceTofRoiWidthSpads >= 4 && distanceTofRoiWidthSpads <= 16, "VL53L1X ROI width must be 4 through 16 SPADs.");
 static_assert(distanceTofRoiHeightSpads >= 4 && distanceTofRoiHeightSpads <= 16, "VL53L1X ROI height must be 4 through 16 SPADs.");
 static_assert(AUTO_DISTANCE_STOP < AUTO_DISTANCE_RESTART, "AUTO_DISTANCE_STOP must be below AUTO_DISTANCE_RESTART.");

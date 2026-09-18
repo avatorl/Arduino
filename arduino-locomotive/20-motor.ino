@@ -4,9 +4,6 @@
   // Motor-driving and auto-distance speed control live here.
   // These settings mainly affect how the train accelerates, brakes, and reverses.
 
-  constexpr int AUTO_DISTANCE_INVALID = -1;
-  constexpr int AUTO_DISTANCE_PENDING = -2;  // First measurement is not due yet; not a sensor error.
-
   // Obstacle stop latch for auto-distance hysteresis (see motorVoltageFromDistance() below).
   // true  = the train stopped because an obstacle came closer than AUTO_DISTANCE_STOP and must stay
   //         stopped until the obstacle clears past AUTO_DISTANCE_RESTART.
@@ -212,16 +209,17 @@
   // Convert obstacle distance into a motor-voltage target with stop/restart hysteresis.
   // Map obstacle distance to a target motor voltage.
   // Hysteresis (the reason STOP and RESTART are two different distances):
-  //   - While driving: an obstacle closer than AUTO_DISTANCE_STOP (10 cm) latches a full stop.
+  //   - While driving: an obstacle closer than AUTO_DISTANCE_STOP latches a full stop.
   //   - While stopped by the latch: the train stays stopped until the obstacle clears past
-  //     AUTO_DISTANCE_RESTART (12 cm); readings inside the 10-12 cm band keep the previous decision.
+  //     or reaches AUTO_DISTANCE_RESTART; readings inside the configured hysteresis band keep the
+  //     previous decision.
   //   - While driving at or below AUTO_DISTANCE_MIN_SPEED, the train crawls at level 1 until the
   //     obstacle either clears or crosses the AUTO_DISTANCE_STOP line.
   // Without this band the train would oscillate stop/start when an obstacle sits near a single
   // threshold, because sensor noise flips consecutive readings above/below it.
   uint16_t motorVoltageFromDistance(int distance) {
     if (distance < AUTO_DISTANCE_STOP) autoObstacleStopLatched = true;         // too close -> latch stop
-    else if (distance > AUTO_DISTANCE_RESTART) autoObstacleStopLatched = false; // clear -> release latch
+    else if (distance >= AUTO_DISTANCE_RESTART) autoObstacleStopLatched = false; // clear -> release latch
     if (autoObstacleStopLatched) return 0;
 
     uint16_t minV = min(MAX_SAFE_MOTOR_MV, voltageSteps[1]);        // ≈3.5V
@@ -242,12 +240,15 @@
       exitAutoDistanceMode();
       return;
     }
-    int distanceReading = getDistanceReading();
-    // Enabling AUTO on a moving train is a live handoff, not a stop/start. Only a measurement
-    // that is not due yet preserves the old PWM; an actual invalid reading still stops below.
-    if (distanceReading == AUTO_DISTANCE_PENDING) return;
+    const DistanceReading reading = getDistanceReading();
+    // Enabling AUTO on a moving train is a live handoff, not a stop/start. Pending or cached
+    // samples preserve the current PWM and obstacle latch until a fresh valid sample arrives.
+    if (reading.status == DistanceReadingStatus::Pending ||
+        reading.status == DistanceReadingStatus::Cached) {
+      return;
+    }
 
-    if (distanceReading < 0) {
+    if (reading.status == DistanceReadingStatus::Invalid) {
       pendingMotorStopReason = F("auto: invalid distance sensor");
       SetRGBColor(RgbColor::Red);
       DBGLN_DISTANCE_SENSOR(F("Auto: STOP (invalid distance sensor)"));
@@ -255,8 +256,9 @@
       return;
     }
 
-    // getDistanceReading() logs the full physical range. This value is deliberately the separate
-    // 1..50 cm control value used to select motor speed, so farther targets all mean max speed.
+    const int distanceReading = reading.centimetres;
+    // getDistanceReading() logs the full physical range. This is the separate
+    // 1..AUTO_DISTANCE_MAX_SPEED control value used to select motor speed.
     DBG_DISTANCE_SENSOR(F("Auto control distance: "));
     DBG_DISTANCE_SENSOR(distanceReading);
     DBGLN_DISTANCE_SENSOR(F(" cm"));
@@ -288,7 +290,7 @@
   // Ramp the motor toward a requested speed.
   // SAFETY: a stop request (targetSpeed == 0) is executed IMMEDIATELY, before the ramp-delay gate
   // below. The gate exists only to pace gradual speed changes (one rampStep every rampDelay ms);
-  // letting it delay an emergency stop by up to rampDelay (80 ms) would add several centimetres of
+  // letting it delay an emergency stop by up to rampDelay would add avoidable
   // travel toward an obstacle at full speed.
   void updateMotorSpeed(int targetSpeed, int minimumStartSpeed) {
     if (targetSpeed == 0) {

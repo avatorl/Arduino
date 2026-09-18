@@ -71,10 +71,13 @@ void setup()
 
 void loop()
 {
-  uint16_t mm = sensor.read() + 40;
+  uint16_t mm = sensor.read();
+
+  if (mm < 500) { mm = mm + 30; };
 
   Serial.print(mm);
   Serial.print(F(" mm"));
   if (sensor.timeoutOccurred()) { Serial.print(F("  TIMEOUT")); }
   Serial.println();
+  delay(100);
 }

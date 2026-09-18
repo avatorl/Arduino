@@ -335,13 +335,23 @@ void updateMotorReverseCooldown();
 void initDistanceSensorHardware();
 bool startDistanceSensorRanging();
 bool recoverDistanceSensorAfterXshut();
+enum class DistanceReadingStatus : uint8_t {
+  Pending,
+  Valid,
+  Cached,
+  Invalid
+};
+
+struct DistanceReading {
+  int centimetres;
+  DistanceReadingStatus status;
+};
+
 // Starts or stops distance-sensor continuous ranging without a full re-init.
 // Ranging is only needed while auto-distance mode is active, so stopping it
 // saves power and I2C traffic the rest of the time.
 void setDistanceSensorRangingActive(bool active);
-void setDistanceSensorDebugSamplingEnabled(bool enabled);
-void updateDistanceSensorDebugSampling();
-int getDistanceReading();
+DistanceReading getDistanceReading();
 uint8_t irReceive();
 bool tryPlayMelodyForButton(uint8_t code);
 void playRandomMelody();
@@ -991,10 +1001,6 @@ void loop() {
   if (!motorFaultLatched && AutoDistanceOnOff == 1 && !momentaryActive) {
     updateAutoDistanceSpeed();
   }
-  // When distance debugging is enabled, the color-sensor illumination toggle on
-  // A2 explicitly requests live ToF samples even while auto-distance control is
-  // off.
-  updateDistanceSensorDebugSampling();
   if (boostActive && (long)(millis() - boostEndsAt) >= 0) {
     boostActive = false;
     boostCooldownEndsAt = millis() + BOOST_COOLDOWN_MS;
