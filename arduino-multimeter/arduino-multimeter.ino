@@ -17,7 +17,6 @@ const float VOLTAGE_CALIBRATION = 1.01F;
 const float DEFAULT_REFERENCE_VOLTAGE = 5.0F;
 const float INTERNAL_REFERENCE_VOLTAGE = 1.1F;
 const float VOLTAGE_REF_SWITCH_THRESHOLD = 11.80F;
-const float VOLTAGE_STDDEV_LIMIT = 0.05F;
 
 // Capacitance meter constants copied from the dual-resistor sketch.
 const unsigned long CAP_10K_TIMEOUT_US = 100000UL;
@@ -47,8 +46,6 @@ struct VoltageResult {
   bool usedInternalReference;
   float voltage;
   float stdDev;
-  int minRaw;
-  int maxRaw;
 };
 
 struct CapacitanceResult {
@@ -74,6 +71,7 @@ enum CapRangeStatus {
 void printHelp();
 void handleSerialCommands();
 void printUnknownCommand(char command);
+void selectAnalogReference(uint8_t reference);
 void settleAfterReferenceChange();
 SampleStats readSettledSamples(uint8_t pin);
 VoltageResult measureVoltage();
@@ -91,8 +89,7 @@ void setup() {
 
   releaseCapacitanceCircuit();
 
-  analogReference(DEFAULT);
-  settleAfterReferenceChange();
+  selectAnalogReference(DEFAULT);
 
   printHelp();
 }
@@ -148,6 +145,11 @@ void printUnknownCommand(char command) {
   Serial.println(F("'"));
 }
 
+void selectAnalogReference(uint8_t reference) {
+  analogReference(reference);
+  settleAfterReferenceChange();
+}
+
 void settleAfterReferenceChange() {
   // The internal reference becomes active on the first conversion, so trigger
   // it before waiting for the voltage to stabilize.
@@ -167,16 +169,17 @@ SampleStats readSettledSamples(uint8_t pin) {
   stats.minRaw = 1023;
   stats.maxRaw = 0;
 
-  int samples[VOLTAGE_SAMPLES];
-  float sum = 0.0F;
+  float m2 = 0.0F;
 
   (void)analogRead(pin);
   delay(ADC_SAMPLE_SPACING_MS);
 
   for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
     const int rawValue = analogRead(pin);
-    samples[i] = rawValue;
-    sum += (float)rawValue;
+    const float sample = (float)rawValue;
+    const float delta = sample - stats.meanRaw;
+    stats.meanRaw += delta / (float)(i + 1);
+    m2 += delta * (sample - stats.meanRaw);
 
     if (rawValue < stats.minRaw) {
       stats.minRaw = rawValue;
@@ -188,15 +191,7 @@ SampleStats readSettledSamples(uint8_t pin) {
     delay(ADC_SAMPLE_SPACING_MS);
   }
 
-  stats.meanRaw = sum / (float)VOLTAGE_SAMPLES;
-
-  float sumSquares = 0.0F;
-  for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
-    const float delta = (float)samples[i] - stats.meanRaw;
-    sumSquares += delta * delta;
-  }
-
-  stats.stdDevRaw = sqrt(sumSquares / (float)VOLTAGE_SAMPLES);
+  stats.stdDevRaw = sqrt(m2 / (float)VOLTAGE_SAMPLES);
   return stats;
 }
 
@@ -206,13 +201,10 @@ VoltageResult measureVoltage() {
   result.usedInternalReference = false;
   result.voltage = 0.0F;
   result.stdDev = 0.0F;
-  result.minRaw = 0;
-  result.maxRaw = 0;
 
   // Keep the capacitance resistors from loading the shared A0 divider node.
   releaseCapacitanceCircuit();
-  analogReference(DEFAULT);
-  settleAfterReferenceChange();
+  selectAnalogReference(DEFAULT);
 
   Serial.println(F("STATUS: voltage reference = 5V"));
   SampleStats defaultStats = readSettledSamples(ANALOG_PIN);
@@ -220,14 +212,12 @@ VoltageResult measureVoltage() {
                           DIVIDER_RATIO * VOLTAGE_CALIBRATION;
 
   if (measuredVoltage <= VOLTAGE_REF_SWITCH_THRESHOLD) {
-    analogReference(INTERNAL);
-    settleAfterReferenceChange();
+    selectAnalogReference(INTERNAL);
     Serial.println(F("STATUS: voltage reference = 1.1V"));
 
     SampleStats internalStats = readSettledSamples(ANALOG_PIN);
     if (internalStats.minRaw <= 5 || internalStats.maxRaw >= 1018) {
-      analogReference(DEFAULT);
-      settleAfterReferenceChange();
+      selectAnalogReference(DEFAULT);
       Serial.println(F("ERROR: voltage out of range on 1.1V reference"));
       return result;
     }
@@ -236,33 +226,22 @@ VoltageResult measureVoltage() {
                       DIVIDER_RATIO * VOLTAGE_CALIBRATION;
     result.stdDev = (internalStats.stdDevRaw * INTERNAL_REFERENCE_VOLTAGE / 1023.0F) *
                     DIVIDER_RATIO * VOLTAGE_CALIBRATION;
-    result.minRaw = internalStats.minRaw;
-    result.maxRaw = internalStats.maxRaw;
     result.usedInternalReference = true;
   } else {
     if (defaultStats.minRaw <= 5 || defaultStats.maxRaw >= 1018) {
-      analogReference(DEFAULT);
-      settleAfterReferenceChange();
+      selectAnalogReference(DEFAULT);
       Serial.println(F("ERROR: voltage out of range on 5V reference"));
       return result;
     }
 
     result.stdDev = (defaultStats.stdDevRaw * DEFAULT_REFERENCE_VOLTAGE / 1023.0F) *
                     DIVIDER_RATIO * VOLTAGE_CALIBRATION;
-    result.minRaw = defaultStats.minRaw;
-    result.maxRaw = defaultStats.maxRaw;
   }
 
-  analogReference(DEFAULT);
-  settleAfterReferenceChange();
+  selectAnalogReference(DEFAULT);
 
   result.ok = true;
   result.voltage = measuredVoltage;
-
-  if (result.stdDev > VOLTAGE_STDDEV_LIMIT) {
-    Serial.println(F("WARNING: voltage noise exceeds precision limit"));
-  }
-
   return result;
 }
 
@@ -292,8 +271,7 @@ void releaseCapacitanceCircuit() {
 
 CapRangeStatus measureCapacitanceRange(float resistorOhms, unsigned long timeoutUs, unsigned long &elapsedUs) {
   releaseCapacitanceCircuit();
-  analogReference(DEFAULT);
-  settleAfterReferenceChange();
+  selectAnalogReference(DEFAULT);
 
   if (!dischargeCapacitor()) {
     return CAP_RANGE_DISCHARGE_FAILED;
@@ -383,8 +361,7 @@ OscillographResult runOscillograph() {
   result.maxRaw = 0;
 
   releaseCapacitanceCircuit();
-  analogReference(DEFAULT);
-  settleAfterReferenceChange();
+  selectAnalogReference(DEFAULT);
 
   Serial.println(F("STATUS: oscillograph preview = 5V"));
   SampleStats previewStats = readSettledSamples(ANALOG_PIN);
@@ -392,8 +369,7 @@ OscillographResult runOscillograph() {
                          DIVIDER_RATIO * VOLTAGE_CALIBRATION;
 
   if (previewVoltage <= VOLTAGE_REF_SWITCH_THRESHOLD) {
-    analogReference(INTERNAL);
-    settleAfterReferenceChange();
+    selectAnalogReference(INTERNAL);
     Serial.println(F("STATUS: oscillograph preview = 1.1V"));
     result.usedInternalReference = true;
   }
@@ -422,8 +398,7 @@ OscillographResult runOscillograph() {
   }
   Serial.println(F("OSCILLOGRAPH: end"));
 
-  analogReference(DEFAULT);
-  settleAfterReferenceChange();
+  selectAnalogReference(DEFAULT);
 
   result.ok = true;
   return result;
@@ -440,10 +415,7 @@ void printVoltageResult(const VoltageResult &result) {
   Serial.print(result.usedInternalReference ? F("1.1V") : F("5V"));
   Serial.print(F(" | STDDEV: "));
   Serial.print(result.stdDev, 2);
-  Serial.print(F(" V | RAW: "));
-  Serial.print(result.minRaw);
-  Serial.print(F("-"));
-  Serial.println(result.maxRaw);
+  Serial.println(F(" V"));
 }
 
 void printCapacitanceResult(const CapacitanceResult &result) {
