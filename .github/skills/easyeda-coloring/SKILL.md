@@ -7,7 +7,7 @@ description: Apply the repository's EasyEDA schematic JSON color schema when cre
 
 Use this skill only when creating or editing EasyEDA schematic JSON.
 
-Before making edits, read the repository-root `easy-eda-color-schema.md`.
+Before making edits, read `easy-eda-color-schema.md`.
 
 1. Parse the current JSON and identify the relevant `LIB~`, `P~`, `W~`, `J~`, and `T~` records.
 2. Make only the requested record-scoped changes.

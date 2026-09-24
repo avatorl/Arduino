@@ -63,6 +63,9 @@ No cross-project lint command is configured.
 - Hardware-dependent behavior should be validated by compiling the selected
   sketch; host-side tests cover only logic deliberately separated from hardware
   access.
+- Never assume an uncommitted change should be reverted. Assume the user may
+  be editing the same files in parallel unless they explicitly say otherwise;
+  if intent is unclear, ask before undoing or overwriting code.
 
 ## EasyEDA schematic JSON
 

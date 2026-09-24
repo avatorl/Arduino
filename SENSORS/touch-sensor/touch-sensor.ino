@@ -15,7 +15,7 @@ const int PIN_TOUCH =
     A0; // Touch sensor (e.g a piece of wire) connected to this pin
 
 const int touchValueThreshold =
-    10; // change this threshold value as needed; decrease to
+    3; // change this threshold value as needed; decrease to
         // increase sensitivity or increase to increase
         // reliability in noisy environment
 
@@ -26,7 +26,7 @@ void setup() {
   pinMode(PIN_LED, OUTPUT);
 
   // Measures the baseline capacitance
-  baseline = ADCTouch.read(PIN_TOUCH, 100);
+  baseline = ADCTouch.read(PIN_TOUCH, 10000);
   Serial.print("Baseline: ");
   Serial.println(baseline);
 }
@@ -34,7 +34,7 @@ void setup() {
 void loop() {
 
   // Read current value and subtract the baseline
-  touchValue = ADCTouch.read(PIN_TOUCH) - baseline;
+  int touchValue = ADCTouch.read(PIN_TOUCH, 1000) - baseline;
 
   Serial.print("Value: ");
   Serial.println(touchValue);
