@@ -9,30 +9,32 @@ bank connects from GPIO pins to A2:
 | Pin | Reference resistor | Resistance-mode use |
 | --- | ---: | --- |
 | D2 | 100 ohm | Never used; remains high impedance |
-| D3 | 1 kohm | Auto-ranging reference |
-| D4 | 10 kohm | Auto-ranging reference |
-| D5 | 100 kohm | Auto-ranging reference |
-| D6 | 1 Mohm | Auto-ranging reference |
+| D3 | 1.0 kohm | Auto-ranging reference |
+| D4 | 9.4 kohm | Auto-ranging reference |
+| D5 | 71.7 kohm | Auto-ranging reference |
+| D6 | 0.48 Mohm | Auto-ranging reference |
 
 Existing voltage, capacitance, zero-calibration, oscillograph, and help
 commands must retain their current behavior.
 
 ## Measurement
 
-The command will use D3 through D6 only. Before and after every sample, D2
-through D6 will be configured as `INPUT` so all reference paths are
-high-impedance. For each candidate range, the firmware will:
+The command will use D3 through D6 only. Before and after every sample, it
+will write `LOW` to D2 through D6 and then configure each as `INPUT`. Clearing
+the output latch first prevents an inactive pin's internal pull-up from loading
+A2. For each candidate range, the firmware will:
 
 1. Configure its GPIO as `OUTPUT` and drive it HIGH.
 2. Wait for the existing ADC settling interval.
 3. Take the existing multi-sample ADC reading from A2.
-4. Restore the GPIO to `INPUT`.
+4. Write the GPIO LOW and restore it to `INPUT`.
 
-Ranges with an ADC mean from 6 through 1017 inclusive are valid candidates.
-The valid sample nearest ADC mid-scale is selected because it provides the
-best relative divider resolution. With `N` as its averaged ADC value and
-`Rref` as the selected reference resistance, the calculated unknown resistance
-is:
+Resistance mode will select the `DEFAULT` (5 V) ADC reference before the
+passive check and each range scan. Ranges with an ADC mean strictly greater
+than 5 and strictly less than 1018 are valid candidates. The valid sample
+nearest ADC mid-scale is selected because it provides the best relative divider
+resolution. With `N` as its averaged ADC value and `Rref` as the selected
+reference resistance, the calculated unknown resistance is:
 
 ```text
 Rx = Rref * N / (1023 - N)
@@ -50,16 +52,16 @@ GPIO absolute maximum. D2 remains high impedance throughout resistance mode.
 
 Before enabling a reference GPIO, the command will take the existing
 ten-sample passive reading of A2. A maximum sample above 5 ADC counts (about
-24 mV with a 5 V reference) indicates a live or charged input and stops the
-measurement. Firmware is not a substitute for hardware protection: the user
-must measure only unpowered resistors.
+24 mV with the explicitly selected 5 V reference) indicates a live or charged
+input and stops the measurement. Firmware is not a substitute for hardware
+protection: the user must measure only unpowered resistors.
 
 The command reports explicit errors rather than a numeric result when:
 
 - A2 indicates a live or charged input before excitation.
-- No safe range has a mean above 5 ADC counts, indicating a short or a
+- Every safe range has a mean at or below 5 ADC counts, indicating a short or a
   resistance below the supported range.
-- No safe range has a mean below 1018 ADC counts, indicating an open circuit
+- Every safe range has a mean at or above 1018 ADC counts, indicating an open circuit
   or a resistance above the supported range.
 
 If one or more ranges are valid, the command reports the selected range and a
