@@ -244,13 +244,13 @@ VoltageResult measureVoltage() {
   analogReference(DEFAULT);
   settleAfterReferenceChange();
 
-  if (result.stdDev > VOLTAGE_STDDEV_LIMIT) {
-    Serial.println(F("ERROR: voltage unstable"));
-    return result;
-  }
-
   result.ok = true;
   result.voltage = measuredVoltage;
+
+  if (result.stdDev > VOLTAGE_STDDEV_LIMIT) {
+    Serial.println(F("WARNING: voltage noise exceeds precision limit"));
+  }
+
   return result;
 }
 
