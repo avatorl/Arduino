@@ -31,6 +31,8 @@ const float CAP_RESISTOR_1K = 1000.0F;
 const int VOLTAGE_SAMPLES = 10;
 const unsigned long ADC_SETTLE_DELAY_MS = 5UL;
 const unsigned long ADC_SAMPLE_SPACING_MS = 1UL;
+const int OSCILLOGRAPH_SAMPLES = 128;
+const unsigned int OSCILLOGRAPH_SAMPLE_SPACING_US = 2000U;
 
 struct SampleStats {
   float meanRaw;
@@ -53,6 +55,13 @@ struct CapacitanceResult {
   const char *unit;
 };
 
+struct OscillographResult {
+  bool ok;
+  bool usedInternalReference;
+  int minRaw;
+  int maxRaw;
+};
+
 enum CapRangeStatus {
   CAP_RANGE_SUCCESS,
   CAP_RANGE_TIMEOUT,
@@ -66,10 +75,12 @@ void settleAfterReferenceChange();
 SampleStats readSettledSamples(uint8_t pin);
 VoltageResult measureVoltage();
 CapacitanceResult measureCapacitance();
+OscillographResult runOscillograph();
 bool dischargeCapacitor();
 CapRangeStatus measureCapacitanceRange(float resistorOhms, unsigned long timeoutUs, unsigned long &elapsedUs);
 void printVoltageResult(const VoltageResult &result);
 void printCapacitanceResult(const CapacitanceResult &result);
+void printOscillographResult(const OscillographResult &result);
 
 void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
@@ -97,6 +108,7 @@ void printHelp() {
   Serial.println(F("Commands:"));
   Serial.println(F("  v - measure voltage"));
   Serial.println(F("  c - measure capacitance"));
+  Serial.println(F("  o - capture oscillograph waveform"));
   Serial.println(F("  h - show this help"));
 }
 
@@ -116,6 +128,10 @@ void handleSerialCommands() {
       case 'c':
       case 'C':
         printCapacitanceResult(measureCapacitance());
+        break;
+      case 'o':
+      case 'O':
+        printOscillographResult(runOscillograph());
         break;
       case 'h':
       case 'H':
@@ -340,6 +356,59 @@ CapacitanceResult measureCapacitance() {
   return result;
 }
 
+OscillographResult runOscillograph() {
+  OscillographResult result;
+  result.ok = false;
+  result.usedInternalReference = false;
+  result.minRaw = 1023;
+  result.maxRaw = 0;
+
+  analogReference(DEFAULT);
+  settleAfterReferenceChange();
+
+  Serial.println(F("STATUS: oscillograph preview = 5V"));
+  SampleStats previewStats = readSettledSamples(ANALOG_PIN);
+  float previewVoltage = (previewStats.meanRaw * DEFAULT_REFERENCE_VOLTAGE / 1023.0F) *
+                         DIVIDER_RATIO * VOLTAGE_CALIBRATION;
+
+  if (previewVoltage <= VOLTAGE_REF_SWITCH_THRESHOLD) {
+    analogReference(INTERNAL);
+    settleAfterReferenceChange();
+    Serial.println(F("STATUS: oscillograph preview = 1.1V"));
+    result.usedInternalReference = true;
+  }
+
+  Serial.println(F("OSCILLOGRAPH: start"));
+  for (int i = 0; i < OSCILLOGRAPH_SAMPLES; i++) {
+    const int rawValue = analogRead(ANALOG_PIN);
+    if (rawValue < result.minRaw) {
+      result.minRaw = rawValue;
+    }
+    if (rawValue > result.maxRaw) {
+      result.maxRaw = rawValue;
+    }
+
+    float voltage = (rawValue * (result.usedInternalReference ? INTERNAL_REFERENCE_VOLTAGE : DEFAULT_REFERENCE_VOLTAGE) / 1023.0F) *
+                    DIVIDER_RATIO * VOLTAGE_CALIBRATION;
+
+    Serial.print(F("OSC:"));
+    Serial.print(i);
+    Serial.print(F(",RAW:"));
+    Serial.print(rawValue);
+    Serial.print(F(",V:"));
+    Serial.println(voltage, 2);
+
+    delayMicroseconds(OSCILLOGRAPH_SAMPLE_SPACING_US);
+  }
+  Serial.println(F("OSCILLOGRAPH: end"));
+
+  analogReference(DEFAULT);
+  settleAfterReferenceChange();
+
+  result.ok = true;
+  return result;
+}
+
 void printVoltageResult(const VoltageResult &result) {
   if (!result.ok) {
     return;
@@ -365,4 +434,17 @@ void printCapacitanceResult(const CapacitanceResult &result) {
   Serial.print(result.unit);
   Serial.print(F(" | RANGE: "));
   Serial.println(result.usedFallbackRange ? F("1k") : F("10k"));
+}
+
+void printOscillographResult(const OscillographResult &result) {
+  if (!result.ok) {
+    return;
+  }
+
+  Serial.print(F("OSCILLOGRAPH: min RAW="));
+  Serial.print(result.minRaw);
+  Serial.print(F(" max RAW="));
+  Serial.print(result.maxRaw);
+  Serial.print(F(" | REF: "));
+  Serial.println(result.usedInternalReference ? F("1.1V") : F("5V"));
 }
