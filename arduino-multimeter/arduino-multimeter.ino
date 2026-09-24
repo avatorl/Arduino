@@ -73,8 +73,6 @@ void handleSerialCommands();
 void printUnknownCommand(char command);
 void settleAfterReferenceChange();
 SampleStats readSettledSamples(uint8_t pin);
-SampleStats readSettledSamplesWithPullup(uint8_t pin);
-bool looksFloatingInput(const SampleStats &baseline, const SampleStats &pulledUp);
 VoltageResult measureVoltage();
 CapacitanceResult measureCapacitance();
 OscillographResult runOscillograph();
@@ -198,21 +196,6 @@ SampleStats readSettledSamples(uint8_t pin) {
   return stats;
 }
 
-SampleStats readSettledSamplesWithPullup(uint8_t pin) {
-  pinMode(pin, INPUT_PULLUP);
-  SampleStats stats = readSettledSamples(pin);
-  pinMode(pin, INPUT);
-  return stats;
-}
-
-bool looksFloatingInput(const SampleStats &baseline, const SampleStats &pulledUp) {
-  const bool baselineInSuspiciousBand = baseline.meanRaw > 50.0F && baseline.meanRaw < 930.0F;
-  const bool pulledToRail = pulledUp.meanRaw > 995.0F || pulledUp.maxRaw >= 1018;
-  const bool bigShift = (pulledUp.meanRaw - baseline.meanRaw) > 250.0F;
-
-  return baselineInSuspiciousBand && pulledToRail && bigShift;
-}
-
 VoltageResult measureVoltage() {
   VoltageResult result;
   result.ok = false;
@@ -225,15 +208,6 @@ VoltageResult measureVoltage() {
 
   Serial.println(F("STATUS: voltage reference = 5V"));
   SampleStats defaultStats = readSettledSamples(ANALOG_PIN);
-  SampleStats pullupStats = readSettledSamplesWithPullup(ANALOG_PIN);
-
-  if (looksFloatingInput(defaultStats, pullupStats)) {
-    analogReference(DEFAULT);
-    settleAfterReferenceChange();
-    Serial.println(F("ERROR: voltage input appears floating"));
-    return result;
-  }
-
   float measuredVoltage = (defaultStats.meanRaw * DEFAULT_REFERENCE_VOLTAGE / 1023.0F) *
                           DIVIDER_RATIO * VOLTAGE_CALIBRATION;
 
