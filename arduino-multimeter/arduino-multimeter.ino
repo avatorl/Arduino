@@ -195,13 +195,6 @@ VoltageResult measureVoltage() {
   float measuredVoltage = (defaultStats.meanRaw * DEFAULT_REFERENCE_VOLTAGE / 1023.0F) *
                           DIVIDER_RATIO * VOLTAGE_CALIBRATION;
 
-  if (defaultStats.meanRaw < 5.0F) {
-    analogReference(DEFAULT);
-    settleAfterReferenceChange();
-    Serial.println(F("ERROR: voltage too close to 0V on 5V reference"));
-    return result;
-  }
-
   if (measuredVoltage <= VOLTAGE_REF_SWITCH_THRESHOLD) {
     analogReference(INTERNAL);
     settleAfterReferenceChange();

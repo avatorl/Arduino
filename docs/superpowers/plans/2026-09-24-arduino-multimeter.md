@@ -4,7 +4,7 @@
 
 **Goal:** Build a serial-controlled Arduino multimeter that measures voltage with automatic 5V/1.1V reference switching and capacitance with automatic 10k/1k range selection.
 
-**Architecture:** Keep the first version in one sketch file so the wiring, serial interface, and measurement logic stay easy to reason about. The sketch will centralize hardware constants, provide a tiny serial command parser, and isolate voltage and capacitance measurement into separate helpers that share the same analog input.
+**Architecture:** Keep the first version in one sketch file, matching the approved spec, so the wiring, serial interface, and measurement logic stay easy to reason about. The approved spec explicitly calls for a single `.ino` file rather than multiple tabs. The sketch will centralize hardware constants, provide a tiny serial command parser, and isolate voltage and capacitance measurement into separate helpers that share the same analog input.
 
 **Tech Stack:** Arduino C++, `arduino-cli`, AVR `analogReference()`, `analogRead()`, `micros()`, `Serial`
 
@@ -15,14 +15,15 @@
 **Files:**
 - Modify: `arduino-multimeter/arduino-multimeter.ino`
 
-- [ ] **Step 1: Add the failing skeleton**
+- [ ] **Step 1: Add the sketch scaffold**
 
-Create named constants for the Nano/Uno wiring from the source sketches, plus the serial baud rate and the voltage/capacitance thresholds. Add `setup()` and `loop()` scaffolding that prints help and waits for commands, but leave the measurement helpers as forward declarations so the file compiles only after the later tasks add them.
+Create named constants for the Nano/Uno wiring from the source sketches, plus the serial baud rate and the voltage/capacitance thresholds. Add `setup()` and `loop()` scaffolding that prints help and waits for commands, and add helper stubs so the sketch builds cleanly from the start.
+Treat `\r` and `\n` as ignored input so the Serial Monitor's line endings do not trigger spurious errors.
 
-- [ ] **Step 2: Run a compile check to confirm the sketch still fails for missing helpers**
+- [ ] **Step 2: Run a compile check to confirm the scaffold builds**
 
 Run: `arduino-cli compile --fqbn arduino:avr:nano --libraries D:\GITHUB\Arduino\libraries D:\GITHUB\Arduino\arduino-multimeter --warnings all`
-Expected: FAIL because the measurement helpers are not implemented yet.
+Expected: PASS.
 
 - [ ] **Step 3: Implement the minimal command parser**
 
@@ -48,10 +49,12 @@ git commit -m "feat: scaffold arduino multimeter sketch"
 - [ ] **Step 1: Write a voltage test harness in the sketch**
 
 Add a `measureVoltage()` helper that reads the divider using the default 5V reference first, calculates the estimated input voltage, and decides whether to retry on the 1.1V reference. Use the existing divider ratio and calibration constant from `SENSORS/voltage-meter-high-precision/voltage-meter-high-precision.ino`.
+Include the spec-required validity checks: reject readings that are within 5 ADC counts of either rail after settling, and reject selected-reference readings whose 10-sample standard deviation exceeds 0.05 V.
 
 - [ ] **Step 2: Make the voltage helper fail-safe**
 
 After every `analogReference()` change, discard the first ADC read and wait for settling before using the second read. Return the selected reference and the computed voltage so the serial layer can print an explicit status line such as `VOLTAGE: ...`.
+Always restore `analogReference(DEFAULT)` before returning so capacitance mode starts from a known reference state.
 
 - [ ] **Step 3: Verify the voltage code compiles**
 
@@ -101,13 +104,23 @@ git commit -m "feat: add capacitance auto-ranging"
 
 - [ ] **Step 1: Add final serial output polish**
 
-Confirm the sketch prints a stable help message, success lines, and error lines so serial output is predictable during manual testing.
+Confirm the sketch prints a stable help message, short status lines when the voltage reference or capacitance range changes, success lines, and error lines so serial output is predictable during manual testing.
 
 - [ ] **Step 2: Compile the final sketch**
 
 Run: `arduino-cli compile --fqbn arduino:avr:nano --libraries D:\GITHUB\Arduino\libraries D:\GITHUB\Arduino\arduino-multimeter --warnings all`
 Expected: PASS.
 
-- [ ] **Step 3: Record the final state**
+- [ ] **Step 3: Compile for the Uno target as well**
+
+Run: `arduino-cli compile --fqbn arduino:avr:uno --libraries D:\GITHUB\Arduino\libraries D:\GITHUB\Arduino\arduino-multimeter --warnings all`
+Expected: PASS.
+
+- [ ] **Step 4: Exercise the serial contract**
+
+Use the serial monitor or a hardware loop to send `v`, `c`, and `h`. Confirm the sketch prints the expected success and error formats, and confirm the voltage command can switch between 5V and 1.1V while capacitance can stay on 10k or fall back to 1k.
+Confirm the status lines include `STATUS: voltage reference = 5V`, `STATUS: voltage reference = 1.1V`, `STATUS: capacitance range = 10k`, and `STATUS: capacitance range = 1k` when those modes change.
+
+- [ ] **Step 5: Record the final state**
 
 If the sketch builds cleanly, leave the code in its final committed state and report the command set (`v`, `c`, `h`) and the automatic range/reference behavior in the completion summary.
