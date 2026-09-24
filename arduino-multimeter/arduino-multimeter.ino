@@ -29,8 +29,9 @@ const float CAP_RESISTOR_10K = 10000.0F;
 const float CAP_RESISTOR_1K = 1000.0F;
 
 const int VOLTAGE_SAMPLES = 10;
-const unsigned long ADC_SETTLE_DELAY_MS = 5UL;
+const unsigned long ADC_SETTLE_DELAY_MS = 25UL;
 const unsigned long ADC_SAMPLE_SPACING_MS = 1UL;
+const int ADC_REFERENCE_DUMMY_READS = 5;
 const int OSCILLOGRAPH_SAMPLES = 128;
 const unsigned int OSCILLOGRAPH_SAMPLE_SPACING_US = 2000U;
 
@@ -149,8 +150,10 @@ void printUnknownCommand(char command) {
 
 void settleAfterReferenceChange() {
   delay(ADC_SETTLE_DELAY_MS);
-  (void)analogRead(ANALOG_PIN);
-  delay(ADC_SAMPLE_SPACING_MS);
+  for (int i = 0; i < ADC_REFERENCE_DUMMY_READS; i++) {
+    (void)analogRead(ANALOG_PIN);
+    delay(ADC_SAMPLE_SPACING_MS);
+  }
 }
 
 SampleStats readSettledSamples(uint8_t pin) {
