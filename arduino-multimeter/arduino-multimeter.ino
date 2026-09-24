@@ -77,6 +77,7 @@ VoltageResult measureVoltage();
 CapacitanceResult measureCapacitance();
 OscillographResult runOscillograph();
 bool dischargeCapacitor();
+void releaseCapacitanceCircuit();
 CapRangeStatus measureCapacitanceRange(float resistorOhms, unsigned long timeoutUs, unsigned long &elapsedUs);
 void printVoltageResult(const VoltageResult &result);
 void printCapacitanceResult(const CapacitanceResult &result);
@@ -85,13 +86,7 @@ void printOscillographResult(const OscillographResult &result);
 void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
 
-  pinMode(CHARGE_PIN_10K, OUTPUT);
-  digitalWrite(CHARGE_PIN_10K, LOW);
-
-  pinMode(CHARGE_PIN_1K, OUTPUT);
-  digitalWrite(CHARGE_PIN_1K, LOW);
-
-  pinMode(DISCHARGE_PIN, INPUT);
+  releaseCapacitanceCircuit();
 
   analogReference(DEFAULT);
   settleAfterReferenceChange();
@@ -203,6 +198,8 @@ VoltageResult measureVoltage() {
   result.voltage = 0.0F;
   result.stdDev = 0.0F;
 
+  // Keep the capacitance resistors from loading the shared A0 divider node.
+  releaseCapacitanceCircuit();
   analogReference(DEFAULT);
   settleAfterReferenceChange();
 
@@ -270,9 +267,16 @@ bool dischargeCapacitor() {
   return true;
 }
 
-CapRangeStatus measureCapacitanceRange(float resistorOhms, unsigned long timeoutUs, unsigned long &elapsedUs) {
+void releaseCapacitanceCircuit() {
   digitalWrite(CHARGE_PIN_10K, LOW);
   digitalWrite(CHARGE_PIN_1K, LOW);
+  pinMode(CHARGE_PIN_10K, INPUT);
+  pinMode(CHARGE_PIN_1K, INPUT);
+  pinMode(DISCHARGE_PIN, INPUT);
+}
+
+CapRangeStatus measureCapacitanceRange(float resistorOhms, unsigned long timeoutUs, unsigned long &elapsedUs) {
+  releaseCapacitanceCircuit();
   analogReference(DEFAULT);
   settleAfterReferenceChange();
 
@@ -281,24 +285,24 @@ CapRangeStatus measureCapacitanceRange(float resistorOhms, unsigned long timeout
   }
 
   if (resistorOhms >= CAP_RESISTOR_10K) {
+    pinMode(CHARGE_PIN_10K, OUTPUT);
     digitalWrite(CHARGE_PIN_10K, HIGH);
   } else {
+    pinMode(CHARGE_PIN_1K, OUTPUT);
     digitalWrite(CHARGE_PIN_1K, HIGH);
   }
 
   const unsigned long startTime = micros();
   while (analogRead(ANALOG_PIN) < CAP_CHARGE_THRESHOLD) {
     if ((micros() - startTime) > timeoutUs) {
-      digitalWrite(CHARGE_PIN_10K, LOW);
-      digitalWrite(CHARGE_PIN_1K, LOW);
+      releaseCapacitanceCircuit();
       elapsedUs = 0;
       return CAP_RANGE_TIMEOUT;
     }
   }
 
   elapsedUs = micros() - startTime;
-  digitalWrite(CHARGE_PIN_10K, LOW);
-  digitalWrite(CHARGE_PIN_1K, LOW);
+  releaseCapacitanceCircuit();
   return CAP_RANGE_SUCCESS;
 }
 
@@ -363,6 +367,7 @@ OscillographResult runOscillograph() {
   result.minRaw = 1023;
   result.maxRaw = 0;
 
+  releaseCapacitanceCircuit();
   analogReference(DEFAULT);
   settleAfterReferenceChange();
 
