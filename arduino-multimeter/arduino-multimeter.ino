@@ -149,7 +149,11 @@ void printUnknownCommand(char command) {
 }
 
 void settleAfterReferenceChange() {
+  // The internal reference becomes active on the first conversion, so trigger
+  // it before waiting for the voltage to stabilize.
+  (void)analogRead(ANALOG_PIN);
   delay(ADC_SETTLE_DELAY_MS);
+
   for (int i = 0; i < ADC_REFERENCE_DUMMY_READS; i++) {
     (void)analogRead(ANALOG_PIN);
     delay(ADC_SAMPLE_SPACING_MS);
