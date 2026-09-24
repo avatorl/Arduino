@@ -28,12 +28,14 @@ high-impedance. For each candidate range, the firmware will:
 3. Take the existing multi-sample ADC reading from A2.
 4. Restore the GPIO to `INPUT`.
 
-The sample nearest ADC mid-scale is selected because it provides the best
-relative divider resolution. With `N` as its averaged ADC value and `Rref` as
-the selected reference resistance, the calculated unknown resistance is:
+Ranges with an ADC mean from 6 through 1017 inclusive are valid candidates.
+The valid sample nearest ADC mid-scale is selected because it provides the
+best relative divider resolution. With `N` as its averaged ADC value and
+`Rref` as the selected reference resistance, the calculated unknown resistance
+is:
 
 ```text
-Rx = Rref * (1023 / N - 1)
+Rx = Rref * N / (1023 - N)
 ```
 
 The result uses ohms, kilohms, or megohms and identifies the chosen reference
@@ -46,18 +48,23 @@ The 100-ohm D2 range is intentionally excluded. A probe short would draw
 approximately 50 mA from a 5 V Arduino GPIO through 100 ohms, above a typical
 GPIO absolute maximum. D2 remains high impedance throughout resistance mode.
 
-Before enabling a reference GPIO, the command will take a passive reading of
-A2. A nonzero reading indicates a live or charged input and stops the
+Before enabling a reference GPIO, the command will take the existing
+ten-sample passive reading of A2. A maximum sample above 5 ADC counts (about
+24 mV with a 5 V reference) indicates a live or charged input and stops the
 measurement. Firmware is not a substitute for hardware protection: the user
 must measure only unpowered resistors.
 
 The command reports explicit errors rather than a numeric result when:
 
 - A2 indicates a live or charged input before excitation.
-- All safe ranges are near zero, indicating a short or a resistance below the
-  supported range.
-- All safe ranges are near full scale, indicating an open circuit or a
-  resistance above the supported range.
+- No safe range has a mean above 5 ADC counts, indicating a short or a
+  resistance below the supported range.
+- No safe range has a mean below 1018 ADC counts, indicating an open circuit
+  or a resistance above the supported range.
+
+If one or more ranges are valid, the command reports the selected range and a
+line beginning `RESISTANCE:`. Errors begin `ERROR:` and the help text adds
+`r - measure resistance`.
 
 ## Validation
 
