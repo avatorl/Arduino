@@ -46,6 +46,8 @@ struct VoltageResult {
   bool usedInternalReference;
   float voltage;
   float stdDev;
+  int minRaw;
+  int maxRaw;
 };
 
 struct CapacitanceResult {
@@ -197,6 +199,8 @@ VoltageResult measureVoltage() {
   result.usedInternalReference = false;
   result.voltage = 0.0F;
   result.stdDev = 0.0F;
+  result.minRaw = 0;
+  result.maxRaw = 0;
 
   // Keep the capacitance resistors from loading the shared A0 divider node.
   releaseCapacitanceCircuit();
@@ -225,6 +229,8 @@ VoltageResult measureVoltage() {
                       DIVIDER_RATIO * VOLTAGE_CALIBRATION;
     result.stdDev = (internalStats.stdDevRaw * INTERNAL_REFERENCE_VOLTAGE / 1023.0F) *
                     DIVIDER_RATIO * VOLTAGE_CALIBRATION;
+    result.minRaw = internalStats.minRaw;
+    result.maxRaw = internalStats.maxRaw;
     result.usedInternalReference = true;
   } else {
     if (defaultStats.minRaw <= 5 || defaultStats.maxRaw >= 1018) {
@@ -236,6 +242,8 @@ VoltageResult measureVoltage() {
 
     result.stdDev = (defaultStats.stdDevRaw * DEFAULT_REFERENCE_VOLTAGE / 1023.0F) *
                     DIVIDER_RATIO * VOLTAGE_CALIBRATION;
+    result.minRaw = defaultStats.minRaw;
+    result.maxRaw = defaultStats.maxRaw;
   }
 
   analogReference(DEFAULT);
@@ -425,7 +433,10 @@ void printVoltageResult(const VoltageResult &result) {
   Serial.print(result.usedInternalReference ? F("1.1V") : F("5V"));
   Serial.print(F(" | STDDEV: "));
   Serial.print(result.stdDev, 2);
-  Serial.println(F(" V"));
+  Serial.print(F(" V | RAW: "));
+  Serial.print(result.minRaw);
+  Serial.print(F("-"));
+  Serial.println(result.maxRaw);
 }
 
 void printCapacitanceResult(const CapacitanceResult &result) {
