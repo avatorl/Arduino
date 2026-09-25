@@ -4,14 +4,14 @@
 
 ## Shared statistics
 
-`calculateSampleStats(float values[], int count)` will accept a float sample array and its count, sorting the caller's temporary array in place. All three modes will collect values into float arrays before calling it. It will calculate:
+`calculateSampleStats(float values[], int count)` will accept a float sample array and its count, sorting the caller's temporary array in place. All three modes will collect values into float arrays before calling it. It will return a shared `SampleStats` structure with `medianRaw`, `meanRaw`, `stdDevRaw`, `minRaw`, and `maxRaw` fields.
 
 - median;
 - arithmetic mean;
 - standard deviation;
 - minimum and maximum.
 
-It will use insertion sort. For an odd count, the median is the one center reading. For an even count, it is the average of the two center readings. Standard deviation uses the existing population formula, dividing the sum of squared deviations by the sample count. The median is the only central value used for reported measurements, stability checks, and range decisions; mean and standard deviation are diagnostic Serial output.
+It will use insertion sort. For an odd count, the median is the one center reading. For an even count, it is the average of the two center readings. Standard deviation uses the existing population formula, dividing the sum of squared deviations by the sample count. The median is the central value used for reported measurements and stability comparisons. Mean is diagnostic-only; standard deviation remains diagnostic except for the existing resistance range-quality scoring, which it continues to drive unchanged.
 
 ## Mode integration
 
@@ -23,11 +23,13 @@ It will use insertion sort. For an odd count, the median is the one center readi
 
 Each mode retains its existing hardware preparation, reference selection, timing, error handling, and range-selection behavior. Voltage's reported value intentionally changes from the existing arithmetic mean of 10 readings to their median. The capacitance baseline calibration will also use the helper to remove its duplicate median-of-three sort.
 
-Capacitance samples are converted to nF before passing them to the helper. Because all acquisition errors return immediately, the returned median result sets `ok` to true. After the helper runs, the firmware will select the first completed `CapacitanceResult` whose nF value equals the median to retain its `usedPrecisionRange` field; ties select the first acquired sample. This requires an odd capacitance sample count, so `CAPACITANCE_SAMPLES` remains 3. The final result unit is re-derived from the median nF value with the existing `CAP_MICROFARAD_DISPLAY_THRESHOLD` rule.
+Capacitance samples are converted to nF before passing them to the helper. Because all acquisition errors return immediately, the returned median result sets `ok` to true. After the helper runs, the firmware will select the first completed `CapacitanceResult` whose nF value equals the median to retain its `usedPrecisionRange` field; ties select the first acquired sample. This requires an odd capacitance sample count, so `CAPACITANCE_SAMPLES` remains 3. The final result first converts the median nF value to uF by dividing by 1000, then applies the existing `CAP_MICROFARAD_DISPLAY_THRESHOLD` rule; below that threshold it converts back to nF for display.
 
 ## Diagnostics
 
-Serial diagnostics will identify the `median`, `mean`, and `sd` values for each completed measurement. Mean and standard deviation do not influence the reported voltage, capacitance, or resistance.
+Serial diagnostics will identify the `median`, `mean`, and `sd` values for each completed measurement. Mean does not influence any measurement. Standard deviation does not influence reported voltage or capacitance; it retains its existing use in resistance range-quality scoring.
+
+The oscillograph's existing reference-selection preview also calls the voltage sampler. It is outside this change's three measurement modes and will continue using `meanRaw` for that preview only.
 
 ## Validation
 
