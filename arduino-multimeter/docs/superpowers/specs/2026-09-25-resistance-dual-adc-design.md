@@ -65,12 +65,14 @@ resistance to predict each range's A3 junction reading.
 
 The existing resistance-mode cleanup and GPIO switching behavior remain
 unchanged. Before enabling each reference GPIO, the firmware releases all
-range pins, selects the default ADC reference, and reads settled samples at
-**A3**, the test-resistor node. A maximum reading greater than the existing
-lower raw-value limit is a live-or-charged-input failure: the firmware reports
-an explicit error and does not enable that range. Resistance measurements
-remain limited to unpowered components. Firmware live-input checks do not
-replace external input protection.
+range pins, calls `selectAnalogReference(DEFAULT)` (which runs the existing
+ADC-reference settling delay and dummy conversions), then calls the existing
+`readSettledSamples(A3)` routine. That routine discards one A3 conversion,
+then takes its existing ten samples at the configured sample spacing. A maximum
+reading greater than the existing lower raw-value limit is a live-or-charged-
+input failure: the firmware reports an explicit error and does not enable that
+range. Resistance measurements remain limited to unpowered components.
+Firmware live-input checks do not replace external input protection.
 
 Per-range `STATUS:` output reports the averaged A2 source value, A3 junction
 value, and calculated estimate. The existing result and error formatting
