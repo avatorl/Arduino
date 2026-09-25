@@ -50,16 +50,27 @@ output's load-dependent voltage drop across its output resistance.
 
 The range selector continues to prefer the candidate with the best estimated
 relative ADC resolution, while rejecting invalid, unstable, short/below-range,
-and open/above-range cases. A candidate is invalid when its source-to-junction
-drop is not positive or when either endpoint is too close to an ADC rail for
-the existing scan contract.
+and open/above-range cases. The existing lower and upper rail limits apply to
+the A3 junction reading only; A2 is expected to be near full scale because it
+is driven directly by the active GPIO. A candidate is invalid when the
+source-to-junction difference is at or below the lower raw-value limit.
+
+Stability checks apply to both endpoint readings and to their difference. A
+pair is stable only when the source and junction samples meet the existing
+noise, spread, and successive-window-change limits and their difference stays
+positive. The existing cross-range consistency screen uses the calculated
+resistance to predict each range's A3 junction reading.
 
 ## Safety and output
 
 The existing resistance-mode cleanup and GPIO switching behavior remain
-unchanged. The passive pre-excitation check reads **A3**, the test-resistor
-node, and resistance measurements remain limited to unpowered components.
-Firmware live-input checks do not replace external input protection.
+unchanged. Before enabling each reference GPIO, the firmware releases all
+range pins, selects the default ADC reference, and reads settled samples at
+**A3**, the test-resistor node. A maximum reading greater than the existing
+lower raw-value limit is a live-or-charged-input failure: the firmware reports
+an explicit error and does not enable that range. Resistance measurements
+remain limited to unpowered components. Firmware live-input checks do not
+replace external input protection.
 
 Per-range `STATUS:` output reports the averaged A2 source value, A3 junction
 value, and calculated estimate. The existing result and error formatting
